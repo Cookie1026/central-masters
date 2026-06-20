@@ -51,7 +51,7 @@ CREATE TABLE events (
   gender      VARCHAR(10)  CHECK (gender IN ('男子', '女子', '混合')),
   pool_type   VARCHAR(10)  CHECK (pool_type IN ('長水路', '短水路', '共通')) DEFAULT '共通',
   created_at  TIMESTAMPTZ  DEFAULT NOW(),
-  UNIQUE (name, pool_type)
+  UNIQUE NULLS NOT DISTINCT (name, pool_type, gender)
 );
 
 -- ============================================================
