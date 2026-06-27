@@ -250,6 +250,7 @@ function AthleteTrendCard({ trend }: { trend: AthleteTrend }) {
 }
 
 function TeamProgressChart({ standings }: { standings: TeamStanding[] }) {
+  const [metric, setMetric] = useState<'rank' | 'points'>('rank')
   const rows = standings
     .filter((standing) => standing.mst_event)
     .sort((a, b) => (a.mst_event?.round ?? 0) - (b.mst_event?.round ?? 0))
@@ -259,12 +260,19 @@ function TeamProgressChart({ standings }: { standings: TeamStanding[] }) {
   const padY = 24
   const ranks = rows.map((row) => row.rank ?? 0).filter((rank) => rank > 0)
   const maxRank = Math.max(...ranks, 3)
+  const pointValues = rows.map((row) => Number(row.total_points ?? 0))
+  const maxPoints = Math.max(...pointValues, 1)
+  const minPoints = Math.min(...pointValues)
+  const pointRange = Math.max(maxPoints - minPoints, 1)
   const coords = rows.map((row, index) => {
     const rank = row.rank ?? maxRank
+    const totalPoints = Number(row.total_points ?? 0)
     return {
       row,
       x: rows.length === 1 ? width / 2 : padX + (index / (rows.length - 1)) * (width - padX * 2),
-      y: padY + ((rank - 1) / Math.max(maxRank - 1, 1)) * (height - padY * 2),
+      y: metric === 'rank'
+        ? padY + ((rank - 1) / Math.max(maxRank - 1, 1)) * (height - padY * 2)
+        : padY + ((maxPoints - totalPoints) / pointRange) * (height - padY * 2),
     }
   })
 
@@ -272,23 +280,58 @@ function TeamProgressChart({ standings }: { standings: TeamStanding[] }) {
     <div className="rounded-xl border border-cyan-900/50 bg-slate-800/60 p-4">
       <div className="flex items-center justify-between gap-3 mb-2">
         <div>
-          <h3 className="text-sm font-bold text-white">おおたか 順位推移</h3>
-          <p className="text-[10px] text-slate-500 mt-0.5">グラフ上側ほど上位です</p>
+          <h3 className="text-sm font-bold text-white">おおたか 大会推移</h3>
+          <p className="text-[10px] text-slate-500 mt-0.5">
+            グラフ上側ほど{metric === 'rank' ? '上位' : '高得点'}です
+          </p>
         </div>
-        {ranks.length > 0 && (
+        {metric === 'rank' && ranks.length > 0 ? (
           <div className="text-right">
             <div className="text-lg font-bold text-cyan-300">最高 {Math.min(...ranks)}位</div>
             <div className="text-[10px] text-slate-500">{rows.length}大会</div>
           </div>
+        ) : (
+          <div className="text-right">
+            <div className="text-lg font-bold text-amber-300">最高 {maxPoints.toFixed(1)}pt</div>
+            <div className="text-[10px] text-slate-500">{rows.length}大会</div>
+          </div>
         )}
       </div>
-      <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-44" role="img" aria-label="おおたかの大会順位推移">
-        {[1, Math.ceil(maxRank / 2), maxRank].filter((value, index, all) => all.indexOf(value) === index).map((rank) => {
-          const y = padY + ((rank - 1) / Math.max(maxRank - 1, 1)) * (height - padY * 2)
+
+      <div className="mb-2 flex rounded-lg bg-slate-900/70 p-0.5">
+        {[
+          ['rank', '順位'],
+          ['points', '総得点'],
+        ].map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => setMetric(value as 'rank' | 'points')}
+            className={`flex-1 rounded-md px-3 py-1.5 text-[10px] font-semibold transition-colors ${
+              metric === value
+                ? value === 'rank' ? 'bg-cyan-900/60 text-cyan-300' : 'bg-amber-900/50 text-amber-300'
+                : 'text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-44" role="img" aria-label={`おおたかの大会${metric === 'rank' ? '順位' : '総得点'}推移`}>
+        {(metric === 'rank'
+          ? [1, Math.ceil(maxRank / 2), maxRank]
+          : [maxPoints, (maxPoints + minPoints) / 2, minPoints]
+        ).filter((value, index, all) => all.indexOf(value) === index).map((value) => {
+          const y = metric === 'rank'
+            ? padY + ((value - 1) / Math.max(maxRank - 1, 1)) * (height - padY * 2)
+            : padY + ((maxPoints - value) / pointRange) * (height - padY * 2)
           return (
-            <g key={rank}>
+            <g key={value}>
               <line x1={padX} y1={y} x2={width - padX} y2={y} stroke="#334155" strokeWidth="1" strokeDasharray="4 4" />
-              <text x={padX - 8} y={y + 3} textAnchor="end" fill="#64748b" fontSize="10">{rank}位</text>
+              <text x={padX - 8} y={y + 3} textAnchor="end" fill="#64748b" fontSize="10">
+                {metric === 'rank' ? `${Math.round(value)}位` : `${Math.round(value)}pt`}
+              </text>
             </g>
           )
         })}
@@ -296,7 +339,7 @@ function TeamProgressChart({ standings }: { standings: TeamStanding[] }) {
           <polyline
             points={coords.map((point) => `${point.x},${point.y}`).join(' ')}
             fill="none"
-            stroke="#22d3ee"
+            stroke={metric === 'rank' ? '#22d3ee' : '#f59e0b'}
             strokeWidth="3"
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -304,8 +347,20 @@ function TeamProgressChart({ standings }: { standings: TeamStanding[] }) {
         )}
         {coords.map(({ row, x, y }) => (
           <g key={row.mst_event?.id}>
-            <circle cx={x} cy={y} r="5" fill="#22d3ee" stroke="#083344" strokeWidth="2" />
-            <text x={x} y={y - 9} textAnchor="middle" fill="#a5f3fc" fontSize="10">{row.rank ?? '－'}位</text>
+            <title>
+              {`第${row.mst_event?.round}回：${row.rank ?? '－'}位／${Number(row.total_points ?? 0).toFixed(1)}pt`}
+            </title>
+            <circle
+              cx={x}
+              cy={y}
+              r="5"
+              fill={metric === 'rank' ? '#22d3ee' : '#f59e0b'}
+              stroke={metric === 'rank' ? '#083344' : '#451a03'}
+              strokeWidth="2"
+            />
+            <text x={x} y={y - 9} textAnchor="middle" fill={metric === 'rank' ? '#a5f3fc' : '#fcd34d'} fontSize="10">
+              {metric === 'rank' ? `${row.rank ?? '－'}位` : `${Number(row.total_points ?? 0).toFixed(0)}pt`}
+            </text>
             <text x={x} y={height - 3} textAnchor="middle" fill="#64748b" fontSize="10">第{row.mst_event?.round}回</text>
           </g>
         ))}
