@@ -10,6 +10,7 @@ type MeetEntry = {
     age_group: string
     time_display: string | null
     time_seconds: string | null
+    meet_record_seconds: string | null
     rank: number | null
     points: number | null
     is_meet_record: boolean
@@ -32,11 +33,16 @@ export async function GET(request: Request) {
   const aid = parseInt(athleteId)
   if (!Number.isFinite(aid)) return NextResponse.json({ meets: [] })
 
-  const [{ data: indData }, { data: memberData }] = await Promise.all([
+  const [{ data: athlete }, { data: indData }, { data: memberData }] = await Promise.all([
+    supabaseServer
+      .from('dt_player_person')
+      .select('id, name, gender, mst_team!inner(name)')
+      .eq('id', aid)
+      .maybeSingle(),
     supabaseServer
       .from('dt_result_person')
       .select(
-        'rank, time_display, time_seconds, points, is_meet_record, mst_event!inner(round, pool_type, date), mst_category!inner(name), mst_age!inner(name)',
+        'rank, time_display, time_seconds, meet_record_seconds, points, is_meet_record, mst_event!inner(round, pool_type, date), mst_category!inner(name), mst_age!inner(name)',
       )
       .eq('player_id', aid),
     supabaseServer.from('dt_player_relay').select('relay_result_id').eq('player_id', aid),
@@ -69,6 +75,7 @@ export async function GET(request: Request) {
       age_group: age.name,
       time_display: r.time_display,
       time_seconds: r.time_seconds,
+      meet_record_seconds: r.meet_record_seconds,
       rank: r.rank,
       points: r.points !== null && r.points !== undefined ? parseFloat(String(r.points)) : null,
       is_meet_record: r.is_meet_record,
@@ -98,5 +105,5 @@ export async function GET(request: Request) {
       ),
     }))
 
-  return NextResponse.json({ meets })
+  return NextResponse.json({ athlete, meets })
 }

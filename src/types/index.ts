@@ -92,6 +92,8 @@ export interface AthleteHistoryIndividual {
   event: string
   age_group: string
   time_display: string | null
+  time_seconds: string | null
+  meet_record_seconds: string | null
   rank: number | null
   points: number | null
   is_meet_record: boolean
@@ -121,4 +123,5 @@ export interface TeamStanding {
   female_points: string | null
   mixed_points: string | null
   mst_team: { name: string }
+  mst_event?: { id: number; round: number; pool_type: string; date: string | null }
 }

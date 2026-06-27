@@ -1,6 +1,5 @@
 import type { Metadata } from 'next'
 import { Geist } from 'next/font/google'
-import Link from 'next/link'
 import './globals.css'
 
 const geist = Geist({ variable: '--font-geist-sans', subsets: ['latin'] })
@@ -15,18 +14,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="ja" className={`${geist.variable} h-full`}>
       <body className="h-full bg-slate-900 text-slate-100 flex flex-col antialiased">
         <header className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 border-b border-sky-900/50 shadow-lg shrink-0">
-          <div className="px-4 py-3 flex items-center justify-between gap-4 min-w-0">
+          <div className="px-4 py-3 flex items-center min-w-0">
             <span className="font-bold tracking-wide text-sm sm:text-base whitespace-nowrap overflow-hidden text-ellipsis shrink-1 bg-gradient-to-r from-sky-400 via-cyan-300 to-blue-400 bg-clip-text text-transparent">
               セントラルマスターズ 記録検索
             </span>
-            <nav className="flex gap-3 sm:gap-5 text-xs sm:text-sm font-medium shrink-0 whitespace-nowrap">
-              <Link href="/" className="text-sky-300/80 hover:text-sky-200 transition-colors">
-                個人成績
-              </Link>
-              <Link href="/teams" className="text-sky-300/80 hover:text-sky-200 transition-colors">
-                チーム成績
-              </Link>
-            </nav>
           </div>
         </header>
         <main className="flex-1 overflow-hidden min-h-0">{children}</main>
