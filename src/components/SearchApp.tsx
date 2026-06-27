@@ -2518,6 +2518,9 @@ export default function SearchApp({
                             {meetPlayerTotal.toFixed(1)}pt
                           </span>
                         </div>
+                        <p className="mt-1.5 text-[10px] text-slate-500 leading-tight">
+                          ※DB集計値。公式合計（{currentStanding.total_points.toFixed(1)}pt）と差が生じる場合があります
+                        </p>
                       </div>
                     </div>
                   )}
