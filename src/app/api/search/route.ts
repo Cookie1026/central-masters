@@ -53,7 +53,7 @@ export async function GET(request: Request) {
       mst_event!inner(round, pool_type)
     `)
     .order('time_seconds', { ascending: true, nullsFirst: false })
-    .limit(500)
+    .limit(2000)
 
   if (eventId) query = query.eq('event_id', parseInt(eventId))
   if (athleteIds !== null) query = query.in('player_id', athleteIds)
