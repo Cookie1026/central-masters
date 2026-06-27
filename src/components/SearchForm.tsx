@@ -55,7 +55,7 @@ export default function SearchForm({ events, ageGroups, teams, current }: Props)
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1">種目</label>
+          <label className="block text-sm font-medium text-slate-300 mb-1">競技名</label>
           <select name="event" defaultValue={current.event ?? ''} className={selectClass}>
             <option value="">すべて</option>
             {events.map((e) => (

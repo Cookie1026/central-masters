@@ -26,7 +26,7 @@ export async function GET(request: Request) {
       dt_player_relay(swim_order, split_seconds, dive_time, player_id, is_meet_record, is_japan_record, is_world_record, dt_player_person(name, gender))
     `)
     .order('time_seconds', { ascending: true, nullsFirst: false })
-    .limit(100)
+    .limit(500)
 
   if (eventId) query = query.eq('event_id', parseInt(eventId))
 
