@@ -104,6 +104,7 @@ function animalAvatar(name: string, teamName: string): string {
 }
 
 function AthleteTrendCard({ trend }: { trend: AthleteTrend }) {
+  const [metric, setMetric] = useState<'time' | 'rank'>('time')
   const width = 320
   const height = 96
   const padX = 18
@@ -112,13 +113,25 @@ function AthleteTrendCard({ trend }: { trend: AthleteTrend }) {
   const min = Math.min(...values)
   const max = Math.max(...values)
   const range = Math.max(max - min, 0.5)
-  const coords = trend.points.map((point, index) => {
+  const timeCoords = trend.points.map((point, index) => {
     const x = trend.points.length === 1
       ? width / 2
       : padX + (index / (trend.points.length - 1)) * (width - padX * 2)
     const y = padY + ((point.seconds - min) / range) * (height - padY * 2)
     return { ...point, x, y }
   })
+  const rankedPoints = trend.points
+    .map((point, index) => ({ point, index }))
+    .filter(({ point }) => point.rank != null)
+  const maxRank = Math.max(...rankedPoints.map(({ point }) => point.rank ?? 0), 3)
+  const rankCoords = rankedPoints.map(({ point, index }) => {
+    const x = trend.points.length === 1
+      ? width / 2
+      : padX + (index / (trend.points.length - 1)) * (width - padX * 2)
+    const y = padY + (((point.rank ?? maxRank) - 1) / Math.max(maxRank - 1, 1)) * (height - padY * 2)
+    return { ...point, x, y }
+  })
+  const coords = metric === 'time' ? timeCoords : rankCoords
   const best = trend.points.reduce((current, point) => point.seconds < current.seconds ? point : current)
   const first = trend.points[0]
   const latest = trend.points[trend.points.length - 1]
@@ -146,13 +159,39 @@ function AthleteTrendCard({ trend }: { trend: AthleteTrend }) {
         </div>
       </div>
 
-      <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-24" role="img" aria-label={`${trend.event}のタイム推移`}>
+      <div className="mb-1 flex rounded-lg bg-slate-900/70 p-0.5">
+        <button
+          type="button"
+          onClick={() => setMetric('time')}
+          className={`flex-1 rounded-md px-2 py-1 text-[10px] font-semibold transition-colors ${
+            metric === 'time' ? 'bg-sky-900/70 text-sky-300' : 'text-slate-500 hover:text-slate-300'
+          }`}
+        >
+          タイム
+        </button>
+        <button
+          type="button"
+          onClick={() => setMetric('rank')}
+          disabled={rankedPoints.length === 0}
+          className={`flex-1 rounded-md px-2 py-1 text-[10px] font-semibold transition-colors ${
+            metric === 'rank'
+              ? 'bg-amber-900/50 text-amber-300'
+              : rankedPoints.length === 0
+                ? 'cursor-not-allowed text-slate-700'
+                : 'text-slate-500 hover:text-slate-300'
+          }`}
+        >
+          順位
+        </button>
+      </div>
+
+      <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-24" role="img" aria-label={`${trend.event}の${metric === 'time' ? 'タイム' : '順位'}推移`}>
         <line x1={padX} y1={height - padY} x2={width - padX} y2={height - padY} stroke="#334155" strokeWidth="1" />
         {coords.length > 1 && (
           <polyline
             points={coords.map((point) => `${point.x},${point.y}`).join(' ')}
             fill="none"
-            stroke="#38bdf8"
+            stroke={metric === 'time' ? '#38bdf8' : '#f59e0b'}
             strokeWidth="2.5"
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -160,7 +199,26 @@ function AthleteTrendCard({ trend }: { trend: AthleteTrend }) {
         )}
         {coords.map((point) => (
           <g key={`${point.round}-${point.seconds}`}>
-            <circle cx={point.x} cy={point.y} r="4" fill={point.seconds === best.seconds ? '#fbbf24' : '#38bdf8'} />
+            <title>
+              {`第${point.round}回：${point.time}${point.rank != null ? `／${point.rank}位` : ''}`}
+            </title>
+            <circle
+              cx={point.x}
+              cy={point.y}
+              r="4"
+              fill={
+                metric === 'time'
+                  ? point.seconds === best.seconds ? '#fbbf24' : '#38bdf8'
+                  : point.rank === Math.min(...rankedPoints.map(({ point: ranked }) => ranked.rank ?? 999))
+                    ? '#fbbf24'
+                    : '#f59e0b'
+              }
+            />
+            {metric === 'rank' && (
+              <text x={point.x} y={point.y - 7} textAnchor="middle" fill="#fbbf24" fontSize="9">
+                {point.rank}位
+              </text>
+            )}
             <text x={point.x} y={height - 3} textAnchor="middle" fill="#64748b" fontSize="9">第{point.round}回</text>
           </g>
         ))}
