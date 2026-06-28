@@ -73,6 +73,14 @@ function normalizeOptionName(name: string): string {
   return teamDisplayName(name).replace(/\s+/g, '')
 }
 
+function formatPoints(points: number): string {
+  return points.toFixed(2)
+}
+
+function formatPointDifference(points: number): string {
+  return `${points >= 0 ? '+' : ''}${formatPoints(points)}`
+}
+
 const PREF_ORDER = ['千葉', '東京', '埼玉', '神奈川', '栃木', '群馬', '福島', '兵庫']
 
 function genderDisplay(gender: string): string {
@@ -303,7 +311,7 @@ function TeamProgressChart({
           )}
           {showPoints && (
             <div>
-              <div className="text-lg font-bold text-amber-300">最高 {maxPoints.toFixed(1)}pt</div>
+              <div className="text-lg font-bold text-amber-300">最高 {formatPoints(maxPoints)}pt</div>
               {!showRank && <div className="text-[10px] text-slate-500">{rows.length}大会</div>}
             </div>
           )}
@@ -354,11 +362,11 @@ function TeamProgressChart({
           .map((pt) => {
             const y = pointY(pt)
             return showRank ? (
-              <text key={`pr-${pt}`} x={width - padX + 4} y={y + 3} textAnchor="start" fill="#78350f" fontSize="10">{Math.round(pt)}pt</text>
+              <text key={`pr-${pt}`} x={width - padX + 4} y={y + 3} textAnchor="start" fill="#78350f" fontSize="10">{formatPoints(pt)}pt</text>
             ) : (
               <g key={`pg-${pt}`}>
                 <line x1={padX} y1={y} x2={width - padX} y2={y} stroke="#334155" strokeWidth="1" strokeDasharray="4 4" />
-                <text x={padX - 8} y={y + 3} textAnchor="end" fill="#64748b" fontSize="10">{Math.round(pt)}pt</text>
+                <text x={padX - 8} y={y + 3} textAnchor="end" fill="#64748b" fontSize="10">{formatPoints(pt)}pt</text>
               </g>
             )
           })}
@@ -401,7 +409,7 @@ function TeamProgressChart({
               onClick={canClick ? () => onRoundSelect!(row.mst_event!.id) : undefined}
               style={canClick ? { cursor: 'pointer' } : undefined}
             >
-              <title>{`第${row.mst_event?.round}回：${row.rank ?? '－'}位／${Number(row.total_points ?? 0).toFixed(1)}pt`}</title>
+              <title>{`第${row.mst_event?.round}回：${row.rank ?? '－'}位／${formatPoints(Number(row.total_points ?? 0))}pt`}</title>
 
               {selected && (showRank || showPoints) && (
                 <>
@@ -434,7 +442,7 @@ function TeamProgressChart({
                   />
                   <text x={x} y={ptsLabelY} textAnchor="middle"
                     fill={selected ? '#fbbf24' : '#fcd34d'} fontSize="12" fontWeight={selected ? '700' : '400'}>
-                    {Number(row.total_points ?? 0).toFixed(0)}pt
+                    {formatPoints(Number(row.total_points ?? 0))}pt
                   </text>
                 </>
               )}
@@ -1525,7 +1533,7 @@ export default function SearchApp({
                 )}
                 {vis('points') && (
                   <td className="px-3 py-2 text-right text-amber-400 text-xs font-medium">
-                    {r.points ? Math.round(Number(r.points)) : <span className="text-slate-600">－</span>}
+                    {r.points != null ? formatPoints(Number(r.points)) : <span className="text-slate-600">－</span>}
                   </td>
                 )}
                 {vis('diff') && (
@@ -1660,7 +1668,7 @@ export default function SearchApp({
                   )}
                   {relVis('relay_points') && (
                     <td className="px-3 py-2 text-right text-amber-400 text-xs font-medium align-top">
-                      {r.team_points ? Math.round(Number(r.team_points)) : <span className="text-slate-600">－</span>}
+                      {r.team_points != null ? formatPoints(Number(r.team_points)) : <span className="text-slate-600">－</span>}
                     </td>
                   )}
                   {relVis('relay_diff') && (
@@ -1727,7 +1735,7 @@ export default function SearchApp({
         trendMap.set(key, trend)
       }
       for (const result of meet.relay) {
-        totalPoints += result.team_points ?? 0
+        totalPoints += (result.team_points ?? 0) / 4
         if (result.rank != null && result.rank <= 3) podiums += 1
         if (result.is_meet_record) records += 1
       }
@@ -1925,7 +1933,7 @@ export default function SearchApp({
                   ['リレー', `${athleteAnalysis.relayCount}本`],
                   ['表彰台', `${athleteAnalysis.podiums}回`],
                   ['大会新', `${athleteAnalysis.records}回`],
-                  ['獲得得点', `${Math.round(athleteAnalysis.totalPoints)}pt`],
+                  ['獲得得点', `${formatPoints(athleteAnalysis.totalPoints)}pt`],
                 ].map(([label, value]) => (
                   <div key={label} className="rounded-lg border border-slate-700 bg-slate-800/70 px-3 py-3 text-center">
                     <div className="text-base font-bold text-white">{value}</div>
@@ -2013,7 +2021,7 @@ export default function SearchApp({
                                   {result.is_meet_record && <span className="ml-1 text-amber-400">★</span>}
                                 </td>
                                 <td className="px-3 py-2 text-right text-slate-300">{result.rank != null ? `${result.rank}位` : '－'}</td>
-                                <td className="px-4 py-2 text-right text-amber-400">{result.points != null ? `${Math.round(result.points)}pt` : '－'}</td>
+                                <td className="px-4 py-2 text-right text-amber-400">{result.points != null ? `${formatPoints(result.points)}pt` : '－'}</td>
                               </tr>
                             ))}
                             {meet.relay.map((result, index) => (
@@ -2023,7 +2031,7 @@ export default function SearchApp({
                                 <td className="px-3 py-2 text-slate-400">{result.age_group ?? '－'}</td>
                                 <td className="px-3 py-2 text-right font-mono text-white">{result.time_display ?? '－'}</td>
                                 <td className="px-3 py-2 text-right text-slate-300">{result.rank != null ? `${result.rank}位` : '－'}</td>
-                                <td className="px-4 py-2 text-right text-amber-400">{result.team_points != null ? `${Math.round(result.team_points)}pt` : '－'}</td>
+                                <td className="px-4 py-2 text-right text-amber-400">{result.team_points != null ? `${formatPoints(result.team_points)}pt` : '－'}</td>
                               </tr>
                             ))}
                           </tbody>
@@ -2136,12 +2144,12 @@ export default function SearchApp({
                             <div className="text-[10px] text-slate-500">過去最高順位</div>
                           </div>
                           <div className="rounded-lg border border-slate-700 bg-slate-800/70 p-3 text-center">
-                            <div className="text-lg font-bold text-amber-300">{totalPoints.toFixed(1)}pt</div>
+                            <div className="text-lg font-bold text-amber-300">{formatPoints(totalPoints)}pt</div>
                             <div className="text-[10px] text-slate-500">累計得点</div>
                           </div>
                           <div className="rounded-lg border border-slate-700 bg-slate-800/70 p-3 text-center">
                             <div className="text-lg font-bold text-white">
-                              {(totalPoints / Math.max(ootakaRows.length, 1)).toFixed(1)}pt
+                              {formatPoints(totalPoints / Math.max(ootakaRows.length, 1))}pt
                             </div>
                             <div className="text-[10px] text-slate-500">大会平均</div>
                           </div>
@@ -2164,7 +2172,7 @@ export default function SearchApp({
                                   <div className="h-2.5 overflow-hidden rounded-full bg-slate-700">
                                     <div className={`h-full rounded-full ${color}`} style={{ width: `${ratio(points)}%` }} />
                                   </div>
-                                  <span className="text-right font-mono text-slate-300">{points.toFixed(1)}pt</span>
+                                  <span className="text-right font-mono text-slate-300">{formatPoints(points)}pt</span>
                                 </div>
                               )
                             })}
@@ -2215,14 +2223,14 @@ export default function SearchApp({
                                         <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-sky-500" />
                                         <span className="text-slate-400">個人</span>
                                         <div className="mt-1 font-mono text-base font-bold text-white">
-                                          {individual.toFixed(1)}pt
+                                          {formatPoints(individual)}pt
                                         </div>
                                       </div>
                                       <div>
                                         <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-indigo-500" />
                                         <span className="text-slate-400">リレー</span>
                                         <div className="mt-1 font-mono text-base font-bold text-white">
-                                          {relay.toFixed(1)}pt
+                                          {formatPoints(relay)}pt
                                         </div>
                                       </div>
                                     </div>
@@ -2283,7 +2291,7 @@ export default function SearchApp({
                                         style={{ width: `${(athlete.points / maxPoints) * 100}%` }}
                                       />
                                     </div>
-                                    <span className="text-right font-mono text-slate-300">{athlete.points.toFixed(1)}pt</span>
+                                    <span className="text-right font-mono text-slate-300">{formatPoints(athlete.points)}pt</span>
                                   </div>
                                 )
                               })}
@@ -2332,7 +2340,7 @@ export default function SearchApp({
                 if (totalRelayPts === 0) continue
                 const members = rr.dt_player_relay.filter((m) => m.dt_player_person)
                 if (members.length === 0) continue
-                const ptsPerMember = totalRelayPts / members.length
+                const ptsPerMember = totalRelayPts / 4
                 for (const m of members) {
                   const existing = scoreMap.get(m.player_id)
                   if (existing) {
@@ -2395,7 +2403,7 @@ export default function SearchApp({
                           <h3 className="text-sm font-bold text-white">第{currentMeet.round}回 得点構成</h3>
                           <p className="mt-0.5 text-[10px] text-slate-300">今回の{focusTeamDisplayName}の男女・混合別得点</p>
                         </div>
-                        <span className="font-mono text-sm font-bold text-amber-300">{currentTotal.toFixed(1)}pt</span>
+                        <span className="font-mono text-sm font-bold text-amber-300">{formatPoints(currentTotal)}pt</span>
                       </div>
                       <div className="space-y-3">
                         {scoreParts.map(([label, points, color]) => (
@@ -2407,7 +2415,7 @@ export default function SearchApp({
                                 style={{ width: `${currentTotal > 0 ? (points / currentTotal) * 100 : 0}%` }}
                               />
                             </div>
-                            <span className="text-right font-mono text-slate-300">{points.toFixed(1)}pt</span>
+                            <span className="text-right font-mono text-slate-300">{formatPoints(points)}pt</span>
                           </div>
                         ))}
                       </div>
@@ -2421,12 +2429,13 @@ export default function SearchApp({
                       第{currentMeet?.round}回 全チーム順位
                     </h3>
                     <div className="overflow-x-auto rounded-xl border border-slate-700">
-                    <table className="w-full min-w-[440px] text-sm">
+                    <table className="w-full min-w-[590px] text-sm">
                       <thead>
                         <tr className="bg-gradient-to-r from-sky-950 to-indigo-950 text-slate-300 border-b border-sky-800/40">
                           <th className="px-3 py-3 text-center text-xs font-semibold w-14">順位</th>
                           <th className="px-3 py-3 text-left text-xs font-semibold">チーム名</th>
                           <th className="px-3 py-3 text-right text-xs font-semibold">総合</th>
+                          <th className="px-3 py-3 text-right text-xs font-semibold">自主計算</th>
                           <th className="px-3 py-3 text-right text-xs font-semibold">男子</th>
                           <th className="px-3 py-3 text-right text-xs font-semibold">女子</th>
                           <th className="px-3 py-3 text-right text-xs font-semibold">混合</th>
@@ -2435,6 +2444,13 @@ export default function SearchApp({
                       <tbody>
                         {teamStandings.map((standing, index) => {
                           const isFocus = isFocusTeam(standing.mst_team.name)
+                          const officialPoints = Number(standing.total_points ?? 0)
+                          const calculatedPoints = standing.calculated_points == null
+                            ? null
+                            : Number(standing.calculated_points)
+                          const pointDifference = calculatedPoints == null
+                            ? null
+                            : calculatedPoints - officialPoints
                           return (
                             <tr
                               key={`${standing.mst_team.name}-${index}`}
@@ -2455,16 +2471,28 @@ export default function SearchApp({
                                 {isFocus && <span className="ml-2 text-[10px] text-cyan-500">{focusTeamDisplayName}</span>}
                               </td>
                               <td className="px-3 py-2.5 text-right font-semibold text-sky-400">
-                                {standing.total_points != null ? Number(standing.total_points).toFixed(1) : '－'}
+                                {standing.total_points != null ? formatPoints(Number(standing.total_points)) : '－'}
+                              </td>
+                              <td className="px-3 py-2.5 text-right whitespace-nowrap font-mono">
+                                {calculatedPoints == null || pointDifference == null ? (
+                                  <span className="text-slate-500">－</span>
+                                ) : (
+                                  <>
+                                    <span className="text-slate-100">{formatPoints(calculatedPoints)}</span>
+                                    <span className={`ml-1 ${Math.abs(pointDifference) >= 0.005 ? 'font-bold text-yellow-300' : 'text-slate-500'}`}>
+                                      （{formatPointDifference(pointDifference)}）
+                                    </span>
+                                  </>
+                                )}
                               </td>
                               <td className="px-3 py-2.5 text-right text-slate-200">
-                                {standing.male_points != null ? Number(standing.male_points).toFixed(1) : '－'}
+                                {standing.male_points != null ? formatPoints(Number(standing.male_points)) : '－'}
                               </td>
                               <td className="px-3 py-2.5 text-right text-slate-200">
-                                {standing.female_points != null ? Number(standing.female_points).toFixed(1) : '－'}
+                                {standing.female_points != null ? formatPoints(Number(standing.female_points)) : '－'}
                               </td>
                               <td className="px-3 py-2.5 text-right text-slate-200">
-                                {standing.mixed_points != null ? Number(standing.mixed_points).toFixed(1) : '－'}
+                                {standing.mixed_points != null ? formatPoints(Number(standing.mixed_points)) : '－'}
                               </td>
                             </tr>
                           )
@@ -2505,7 +2533,7 @@ export default function SearchApp({
                                     style={{ width: `${maxPts > 0 ? (athlete.points / maxPts) * 100 : 0}%` }}
                                   />
                                 </div>
-                                <span className="text-right font-mono text-slate-200">{athlete.points.toFixed(1)}pt</span>
+                                <span className="text-right font-mono text-slate-200">{formatPoints(athlete.points)}pt</span>
                               </div>
                             )
                           })}
@@ -2515,11 +2543,11 @@ export default function SearchApp({
                           <span className="text-slate-300 font-semibold">合計</span>
                           <span />
                           <span className="text-right font-mono font-bold text-amber-300">
-                            {meetPlayerTotal.toFixed(1)}pt
+                            {formatPoints(meetPlayerTotal)}pt
                           </span>
                         </div>
                         <p className="mt-1.5 text-[10px] text-slate-500 leading-tight">
-                          ※DB集計値。公式合計（{currentStanding.total_points.toFixed(1)}pt）と差が生じる場合があります
+                          ※DB集計値。公式合計（{formatPoints(Number(currentStanding.total_points))}pt）と差が生じる場合があります
                         </p>
                       </div>
                     </div>
@@ -2622,14 +2650,14 @@ export default function SearchApp({
                 </div>
                 {athleteHistory.map((meet) => {
                   const indPts = meet.individual.reduce((s, r) => s + (r.points ?? 0), 0)
-                  const relPts = meet.relay.reduce((s, r) => s + (r.team_points ?? 0), 0)
+                  const relPts = meet.relay.reduce((s, r) => s + (r.team_points ?? 0) / 4, 0)
                   const totalPts = indPts + relPts
                   return (
                     <div key={meet.round}>
                       <div className="flex items-center justify-between mb-1.5">
                         <span className="text-xs font-bold text-sky-400">第{meet.round}回（{meet.pool_type}）</span>
                         {totalPts > 0 && (
-                          <span className="text-xs text-amber-400 font-medium shrink-0 ml-1">{Math.round(totalPts)}pt</span>
+                          <span className="text-xs text-amber-400 font-medium shrink-0 ml-1">{formatPoints(totalPts)}pt</span>
                         )}
                       </div>
                       {/* 個人・リレー結果テーブル */}

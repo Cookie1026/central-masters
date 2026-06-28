@@ -186,6 +186,82 @@ CREATE TABLE dt_ranking_team (
 -- ============================================================
 -- インデックス (検索・ソートの高速化)
 -- ============================================================
+-- ============================================================
+-- 10. 選手ポイント集計ビュー
+-- ============================================================
+CREATE OR REPLACE VIEW v_player_point
+WITH (security_invoker = true)
+AS
+WITH point_rows AS (
+  SELECT
+    event_id,
+    player_id,
+    COALESCE(points, 0)::NUMERIC AS individual_points,
+    0::NUMERIC AS relay_points
+  FROM dt_result_person
+
+  UNION ALL
+
+  SELECT
+    relay.event_id,
+    member.player_id,
+    0::NUMERIC AS individual_points,
+    (COALESCE(relay.team_points, 0) / 4.0)::NUMERIC AS relay_points
+  FROM dt_player_relay AS member
+  INNER JOIN dt_result_relay AS relay
+    ON relay.id = member.relay_result_id
+)
+SELECT
+  event_id,
+  player_id,
+  SUM(individual_points)::NUMERIC(9,2) AS individual_points,
+  SUM(relay_points)::NUMERIC(9,2) AS relay_points,
+  SUM(individual_points + relay_points)::NUMERIC(9,2) AS total_points
+FROM point_rows
+GROUP BY event_id, player_id;
+
+GRANT SELECT ON v_player_point TO anon, authenticated, service_role;
+
+-- ============================================================
+-- 11. チーム得点自主計算ビュー
+-- ============================================================
+CREATE OR REPLACE VIEW v_team_point_audit
+WITH (security_invoker = true)
+AS
+WITH point_rows AS (
+  SELECT
+    result.event_id,
+    player.team_id,
+    (
+      CASE WHEN result.rank BETWEEN 1 AND 10 THEN 11 - result.rank ELSE 0 END
+      + CASE WHEN result.is_meet_record  THEN 10 ELSE 0 END
+      + CASE WHEN result.is_japan_record THEN 10 ELSE 0 END
+      + CASE WHEN result.is_world_record THEN 10 ELSE 0 END
+    )::NUMERIC AS points
+  FROM dt_result_person AS result
+  INNER JOIN dt_player_person AS player
+    ON player.id = result.player_id
+
+  UNION ALL
+
+  SELECT
+    result.event_id,
+    result.team_id,
+    (
+      CASE WHEN result.rank BETWEEN 1 AND 10 THEN 11 - result.rank ELSE 0 END
+      + CASE WHEN result.is_meet_record THEN 10 ELSE 0 END
+    )::NUMERIC AS points
+  FROM dt_result_relay AS result
+)
+SELECT
+  event_id,
+  team_id,
+  SUM(points)::NUMERIC(9,2) AS calculated_points
+FROM point_rows
+GROUP BY event_id, team_id;
+
+GRANT SELECT ON v_team_point_audit TO anon, authenticated, service_role;
+
 CREATE INDEX idx_dt_result_person_player      ON dt_result_person (player_id);
 CREATE INDEX idx_dt_result_person_event       ON dt_result_person (event_id);
 CREATE INDEX idx_dt_result_person_category    ON dt_result_person (category_id);

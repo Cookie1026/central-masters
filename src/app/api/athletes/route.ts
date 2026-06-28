@@ -51,32 +51,30 @@ export async function GET(request: Request) {
   if (eventId) {
     const athleteIdList = filteredAthletes.map((a) => a.id)
 
-    const { data: results } = await supabaseServer
-      .from('dt_result_person')
-      .select('player_id, points, mst_age!inner(name, min_age)')
-      .eq('event_id', parseInt(eventId))
-      .in('player_id', athleteIdList)
+    const [{ data: results }, { data: playerPoints }] = await Promise.all([
+      supabaseServer
+        .from('dt_result_person')
+        .select('player_id, mst_age!inner(name, min_age)')
+        .eq('event_id', parseInt(eventId))
+        .in('player_id', athleteIdList),
+      supabaseServer
+        .from('v_player_point')
+        .select('player_id, total_points')
+        .eq('event_id', parseInt(eventId))
+        .in('player_id', athleteIdList),
+    ])
 
     const ageMap = new Map<number, { name: string; min_age: number }>()
-    const pointsMap = new Map<number, number>()
     for (const r of results ?? []) {
       const age = r.mst_age as unknown as { name: string; min_age: number }
       const minAge = age.min_age
       const existing = ageMap.get(r.player_id)
       if (existing === undefined || minAge < existing.min_age) ageMap.set(r.player_id, age)
-      pointsMap.set(r.player_id, (pointsMap.get(r.player_id) ?? 0) + toNumber(r.points))
     }
 
-    const { data: relayMembers } = await supabaseServer
-      .from('dt_player_relay')
-      .select('player_id, dt_result_relay!inner(event_id, team_points)')
-      .in('player_id', athleteIdList)
-      .eq('dt_result_relay.event_id', parseInt(eventId))
-
-    for (const row of relayMembers ?? []) {
-      const relay = row.dt_result_relay as unknown as { team_points: unknown }
-      pointsMap.set(row.player_id, (pointsMap.get(row.player_id) ?? 0) + toNumber(relay.team_points))
-    }
+    const pointsMap = new Map(
+      (playerPoints ?? []).map((row) => [row.player_id, toNumber(row.total_points)]),
+    )
 
     // 現在の大会で個人成績がない選手（リレーのみ等）→ 過去の大会から年齢区分を補完
     const missingAgeIds = athleteIdList.filter((id) => !ageMap.has(id))

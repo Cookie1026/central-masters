@@ -119,9 +119,10 @@ export interface AthleteHistoryMeet {
 export interface TeamStanding {
   rank: number | null
   total_points: string | null
+  calculated_points: string | null
   male_points: string | null
   female_points: string | null
   mixed_points: string | null
-  mst_team: { name: string }
+  mst_team: { id: number; name: string }
   mst_event?: { id: number; round: number; pool_type: string; date: string | null }
 }
