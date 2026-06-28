@@ -303,7 +303,7 @@ function TeamProgressChart({
   }))
 
   const width = 720
-  const height = 180
+  const height = 210
   const padX = 42
   const padY = 24
 
@@ -414,7 +414,7 @@ function TeamProgressChart({
         )}
       </div>
 
-      <svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} className="w-full h-44" role="img" aria-label="大会推移グラフ">
+      <svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} className="w-full h-52" role="img" aria-label="大会推移グラフ">
         {/* 順位グリッド（左軸） */}
         {showRank && [1, Math.ceil(maxRank / 2), maxRank]
           .filter((v, i, a) => a.indexOf(v) === i)
