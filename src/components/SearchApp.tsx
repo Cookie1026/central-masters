@@ -756,6 +756,7 @@ export default function SearchApp({
   const [teamStandingsLoading, setTeamStandingsLoading] = useState(false)
   const [checkedTeamNames, setCheckedTeamNames] = useState<Set<string>>(new Set())
   const [teamTableOpen, setTeamTableOpen] = useState(false)
+  const [scoreBreakdownOpen, setScoreBreakdownOpen] = useState(true)
   const [teamAnalysis, setTeamAnalysis] = useState<TeamAnalysis | null>(null)
 
   // Resizable columns (desktop)
@@ -2488,28 +2489,36 @@ export default function SearchApp({
                     <div className="space-y-5">
                     <TeamProgressChart standings={historyRows} overlayTeams={overlayTeamStandings} selectedRound={currentMeet.round} onRoundSelect={(id) => setMeetId(id)} teamName={focusTeamDisplayName} />
 
-                    <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-4">
-                      <div className="mb-4 flex items-center justify-between gap-3">
-                        <div>
-                          <h3 className="text-sm font-bold text-white">{focusTeamDisplayName}　第{currentMeet.round}回 得点構成</h3>
-                          <p className="mt-0.5 text-[10px] text-slate-300">今回の{focusTeamDisplayName}の男女・混合別得点</p>
+                    <div className="rounded-xl border border-slate-700 bg-slate-800/60 overflow-hidden">
+                      <button
+                        className="w-full flex items-center justify-between gap-3 px-4 py-3 bg-gradient-to-r from-sky-950/80 to-indigo-950/80 hover:from-sky-900/80 hover:to-indigo-900/80 transition-colors"
+                        onClick={() => setScoreBreakdownOpen((v) => !v)}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="w-1 h-4 rounded-full bg-sky-400 shrink-0" />
+                          <h3 className="text-sm font-bold text-sky-100">{focusTeamDisplayName}　第{currentMeet.round}回 得点構成</h3>
                         </div>
-                        <span className="font-mono text-sm font-bold text-amber-300">{formatPoints(currentTotal)}pt</span>
-                      </div>
-                      <div className="space-y-3">
-                        {scoreParts.map(([label, points, color]) => (
-                          <div key={label} className="grid grid-cols-[36px_1fr_70px] items-center gap-3 text-xs">
-                            <span className="text-slate-200">{label}</span>
-                            <div className="h-2.5 overflow-hidden rounded-full bg-slate-700">
-                              <div
-                                className={`h-full rounded-full ${color}`}
-                                style={{ width: `${currentTotal > 0 ? (points / currentTotal) * 100 : 0}%` }}
-                              />
+                        <div className="flex items-center gap-3 shrink-0">
+                          <span className="font-mono text-sm font-bold text-amber-300">{formatPoints(currentTotal)}pt</span>
+                          <span className="text-slate-400 text-xs">{scoreBreakdownOpen ? '▲' : '▼'}</span>
+                        </div>
+                      </button>
+                      {scoreBreakdownOpen && (
+                        <div className="px-4 py-3 space-y-3">
+                          {scoreParts.map(([label, points, color]) => (
+                            <div key={label} className="grid grid-cols-[36px_1fr_70px] items-center gap-3 text-xs">
+                              <span className="text-slate-200">{label}</span>
+                              <div className="h-2.5 overflow-hidden rounded-full bg-slate-700">
+                                <div
+                                  className={`h-full rounded-full ${color}`}
+                                  style={{ width: `${currentTotal > 0 ? (points / currentTotal) * 100 : 0}%` }}
+                                />
+                              </div>
+                              <span className="text-right font-mono text-slate-300">{formatPoints(points)}pt</span>
                             </div>
-                            <span className="text-right font-mono text-slate-300">{formatPoints(points)}pt</span>
-                          </div>
-                        ))}
-                      </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                   </>
@@ -2518,14 +2527,17 @@ export default function SearchApp({
                 <div className="flex flex-col gap-4 md:flex-row md:items-start">
                   <div className="flex-1 min-w-0">
                     <button
-                      className="mb-3 flex w-full items-center justify-between text-left md:cursor-default"
+                      className="mb-3 flex w-full items-center justify-between gap-3 rounded-xl bg-gradient-to-r from-sky-950/80 to-indigo-950/80 px-4 py-3 text-left hover:from-sky-900/80 hover:to-indigo-900/80 transition-colors md:cursor-default"
                       onClick={() => setTeamTableOpen((v) => !v)}
                     >
-                      <h3 className="text-sm font-bold text-white">
-                        第{currentMeet?.round}回 全チーム順位
-                      </h3>
+                      <div className="flex items-center gap-2">
+                        <span className="w-1 h-4 rounded-full bg-indigo-400 shrink-0" />
+                        <h3 className="text-sm font-bold text-sky-100">
+                          第{currentMeet?.round}回 全チーム順位
+                        </h3>
+                      </div>
                       <span className="text-xs text-slate-400 md:hidden">
-                        {teamTableOpen ? '▲ 閉じる' : '▼ 開く'}
+                        {teamTableOpen ? '▲' : '▼'}
                       </span>
                     </button>
                     <div className={`${teamTableOpen ? '' : 'hidden'} md:block`}>
