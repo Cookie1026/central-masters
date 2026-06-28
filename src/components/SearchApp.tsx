@@ -27,7 +27,8 @@ interface Props {
 
 type TeamGroup = TeamOption & { ids: number[]; displayName: string }
 type EventGroup = EventOption & { ids: number[] }
-type MainTab = 'all' | 'individual' | 'relay' | 'team' | 'athlete'
+type MainTab = 'results' | 'team' | 'athlete'
+type ResultFilter = 'all' | 'individual' | 'relay'
 type AthleteDetailView = 'overview' | 'trends' | 'records'
 type AthleteHistoryIdentity = {
   id: number
@@ -768,7 +769,8 @@ export default function SearchApp({
   const [athleteForHistory, setAthleteForHistory] = useState<{ id: number; name: string; gender: string; teamName: string } | null>(null)
   const [athleteHistory, setAthleteHistory] = useState<AthleteHistoryMeet[] | null>(null)
   const [historyLoading, setHistoryLoading] = useState(false)
-  const [activeTab, setActiveTab] = useState<MainTab>('all')
+  const [activeTab, setActiveTab] = useState<MainTab>('results')
+  const [resultFilter, setResultFilter] = useState<ResultFilter>('all')
   const [athleteDetailView, setAthleteDetailView] = useState<AthleteDetailView>('overview')
   const [teamStandings, setTeamStandings] = useState<TeamStanding[]>([])
   const [teamHistoryStandings, setTeamHistoryStandings] = useState<TeamStanding[]>([])
@@ -1083,13 +1085,18 @@ export default function SearchApp({
 
   const updateUrl = useCallback((updates: {
     tab?: MainTab
+    filter?: ResultFilter | null
     athleteId?: number | null
     athleteView?: AthleteDetailView | null
   }, replace = false) => {
     const url = new URL(window.location.href)
     if (updates.tab !== undefined) {
-      if (updates.tab === 'all') url.searchParams.delete('tab')
+      if (updates.tab === 'results') url.searchParams.delete('tab')
       else url.searchParams.set('tab', updates.tab)
+    }
+    if (updates.filter !== undefined) {
+      if (!updates.filter || updates.filter === 'all') url.searchParams.delete('filter')
+      else url.searchParams.set('filter', updates.filter)
     }
     if (updates.athleteId !== undefined) {
       if (updates.athleteId === null) url.searchParams.delete('athlete')
@@ -1130,6 +1137,11 @@ export default function SearchApp({
     updateUrl({ tab })
   }, [updateUrl])
 
+  const handleResultFilterChange = useCallback((filter: ResultFilter) => {
+    setResultFilter(filter)
+    updateUrl({ filter })
+  }, [updateUrl])
+
   const handleAthleteViewChange = useCallback((view: AthleteDetailView) => {
     setAthleteDetailView(view)
     updateUrl({ athleteView: view })
@@ -1139,8 +1151,19 @@ export default function SearchApp({
     const restoreFromUrl = () => {
       const params = new URLSearchParams(window.location.search)
       const tab = params.get('tab')
-      const validTabs: MainTab[] = ['all', 'individual', 'relay', 'team', 'athlete']
-      const restoredTab = validTabs.includes(tab as MainTab) ? tab as MainTab : 'all'
+      const legacyResultTabs = ['all', 'individual', 'relay']
+      const validTabs: MainTab[] = ['results', 'team', 'athlete']
+      const restoredTab: MainTab = validTabs.includes(tab as MainTab)
+        ? (tab as MainTab)
+        : legacyResultTabs.includes(tab ?? '')
+          ? 'results'
+          : 'results'
+      const filterFromUrl = params.get('filter') ?? (legacyResultTabs.includes(tab ?? '') ? tab : 'all')
+      const validFilters: ResultFilter[] = ['all', 'individual', 'relay']
+      const restoredFilter: ResultFilter = validFilters.includes(filterFromUrl as ResultFilter)
+        ? (filterFromUrl as ResultFilter)
+        : 'all'
+      setResultFilter(restoredFilter)
       const view = params.get('view')
       const validViews: AthleteDetailView[] = ['overview', 'trends', 'records']
       const restoredView = validViews.includes(view as AthleteDetailView) ? view as AthleteDetailView : 'overview'
@@ -1197,9 +1220,9 @@ export default function SearchApp({
       setAthleteForHistory(null)
       setAthleteHistory(null)
       setAthleteDetailView('overview')
-      if (activeTab === 'athlete') setActiveTab('all')
+      if (activeTab === 'athlete') setActiveTab('results')
       updateUrl({
-        tab: activeTab === 'athlete' ? 'all' : activeTab,
+        tab: activeTab === 'athlete' ? 'results' : activeTab,
         athleteId: null,
         athleteView: null,
       })
@@ -1398,7 +1421,7 @@ export default function SearchApp({
         </div>
       )}
 
-      {activeTab !== 'team' && activeTab !== 'athlete' && (
+      {activeTab === 'results' && (
         <>
           <div>
             <label className={lbl}>競技名</label>
@@ -1490,7 +1513,7 @@ export default function SearchApp({
         クリア
       </button>
 
-      {activeTab !== 'team' && activeTab !== 'athlete' && (
+      {activeTab === 'results' && (
         <div className="mt-3">
           <p className="text-[9px] font-bold text-cyan-700 uppercase tracking-widest mb-1">個人列</p>
           <div className="grid grid-cols-2 gap-1">
@@ -1687,7 +1710,7 @@ export default function SearchApp({
 
   // ── Relay results table ──────────────────────────────────────
   const relayTable = relayResults.length > 0 && (
-    <div className={activeTab === 'all' ? 'mt-6' : ''}>
+    <div className={resultFilter === 'all' ? 'mt-6' : ''}>
       <div className="flex items-start justify-between mb-2 gap-2">
         <span className="text-sm font-bold text-white">リレー成績</span>
         <span className="text-xs text-slate-400 shrink-0 mt-0.5">{relayResults.length}件</span>
@@ -1821,9 +1844,7 @@ export default function SearchApp({
   )
 
   const mainTabs: { id: MainTab; label: string; count?: number; disabled?: boolean }[] = [
-    { id: 'all', label: 'すべて', count: results.length + relayResults.length },
-    { id: 'individual', label: '個人競技', count: results.length },
-    { id: 'relay', label: 'リレー', count: relayResults.length },
+    { id: 'results', label: '競技結果', count: results.length + relayResults.length },
     { id: 'team', label: 'チーム順位' },
     { id: 'athlete', label: '選手詳細', disabled: !athleteForHistory },
   ]
@@ -2190,21 +2211,21 @@ export default function SearchApp({
       {tournamentTitle}
       {tabBar}
       <div className="p-4 flex-1">
-        {loading && activeTab !== 'team' && activeTab !== 'athlete' && (
+        {loading && activeTab === 'results' && (
           <div className="flex items-center justify-center gap-2 py-12 text-slate-500 text-sm">
             <span className="w-4 h-4 border-2 border-sky-500 border-t-transparent rounded-full animate-spin" />
             検索中…
           </div>
         )}
 
-        {!loading && activeTab !== 'team' && activeTab !== 'athlete' && !selectedTeam && !athleteId && !eventKey && !gender && !ageValue && !rankFilter && !recordType && !meetId && (
+        {!loading && activeTab === 'results' && !selectedTeam && !athleteId && !eventKey && !gender && !ageValue && !rankFilter && !recordType && !meetId && (
           <div className="flex flex-col items-center justify-center py-20 select-none">
             <span className="text-5xl mb-4">⚠️</span>
             <p className="text-white font-medium text-base">検索結果が多すぎるのでもっと絞り込んでください</p>
           </div>
         )}
 
-        {!loading && activeTab !== 'team' && activeTab !== 'athlete' && (sortedResults.length >= 500) && (
+        {!loading && activeTab === 'results' && (sortedResults.length >= 500) && (
           <div className="flex flex-col items-center justify-center py-20 select-none">
             <span className="text-5xl mb-4">⚠️</span>
             <p className="text-white font-medium text-base">検索結果数が多すぎて表示できません。もっと絞り込んでください</p>
@@ -2220,17 +2241,45 @@ export default function SearchApp({
             <p className="text-center py-12 text-slate-500 text-sm">検索結果が0件です</p>
           )}
 
-        {!loading && activeTab === 'all' && (individualTable || relayTable) && (
-          <div>
-            {individualTable}
-            {relayTable}
-          </div>
-        )}
-        {!loading && activeTab === 'individual' && (
-          individualTable || <p className="text-center py-12 text-slate-500 text-sm">個人競技の結果がありません</p>
-        )}
-        {!loading && activeTab === 'relay' && (
-          relayTable || <p className="text-center py-12 text-slate-500 text-sm">リレーの結果がありません</p>
+        {activeTab === 'results' && !loading && (
+          <>
+            <div className="flex gap-1.5 mb-4">
+              {(['all', 'individual', 'relay'] as ResultFilter[]).map((f) => {
+                const labels: Record<ResultFilter, string> = { all: 'すべて', individual: '個人競技', relay: 'リレー' }
+                const counts: Record<ResultFilter, number> = {
+                  all: results.length + relayResults.length,
+                  individual: results.length,
+                  relay: relayResults.length,
+                }
+                const active = resultFilter === f
+                return (
+                  <button
+                    key={f}
+                    onClick={() => handleResultFilterChange(f)}
+                    className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+                      active
+                        ? 'bg-sky-600 text-white'
+                        : 'bg-slate-700/60 text-slate-400 hover:bg-slate-600/60 hover:text-slate-200'
+                    }`}
+                  >
+                    {labels[f]}
+                    <span className={`ml-1.5 text-[10px] ${active ? 'text-sky-200' : 'text-slate-600'}`}>
+                      {counts[f]}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+            {resultFilter === 'all' && (individualTable || relayTable) && (
+              <div>{individualTable}{relayTable}</div>
+            )}
+            {resultFilter === 'individual' && (
+              individualTable || <p className="text-center py-12 text-slate-500 text-sm">個人競技の結果がありません</p>
+            )}
+            {resultFilter === 'relay' && (
+              relayTable || <p className="text-center py-12 text-slate-500 text-sm">リレーの結果がありません</p>
+            )}
+          </>
         )}
         {activeTab === 'team' && (
           <div className="max-w-5xl mx-auto">
@@ -2800,8 +2849,8 @@ export default function SearchApp({
                 onClick={() => {
                   setAthleteForHistory(null)
                   setAthleteHistory(null)
-                  if (activeTab === 'athlete') setActiveTab('all')
-                  updateUrl({ tab: activeTab === 'athlete' ? 'all' : activeTab, athleteId: null })
+                  if (activeTab === 'athlete') setActiveTab('results')
+                  updateUrl({ tab: activeTab === 'athlete' ? 'results' : activeTab, athleteId: null })
                 }}
                 className="ml-2 text-slate-600 hover:text-slate-400 shrink-0 leading-none"
                 aria-label="閉じる"
