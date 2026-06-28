@@ -17,7 +17,7 @@ export async function GET(request: Request) {
     .select(`
       id, rank, time_seconds, time_display, team_points,
       age_group_label, combined_age,
-      mst_category!inner(id, name, stroke, distance, relay_count),
+      mst_category!inner(id, name, stroke, distance),
       mst_age(id, name, min_age, max_age),
       dt_player_relay(
         id, swim_order, split_seconds,
@@ -85,7 +85,9 @@ export async function GET(request: Request) {
     // Individual results for this event — find athletes with times in matching stroke
     const stroke = (relay.mst_category as unknown as { stroke?: string }).stroke ?? ''
     const distance = (relay.mst_category as unknown as { distance?: number }).distance ?? 0
-    const relayCount = (relay.mst_category as unknown as { relay_count?: number }).relay_count ?? 4
+    // Parse relay count from category name e.g. "4×50mフリーリレー" → 4
+    const relayCountMatch = categoryName.match(/^(\d+)[×x]/)
+    const relayCount = relayCountMatch ? parseInt(relayCountMatch[1], 10) : 4
 
     // Find athletes from this team who swam the individual equivalent stroke this event
     const equivalentAthletes = (individualResults ?? [])
