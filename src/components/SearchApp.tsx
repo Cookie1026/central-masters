@@ -755,6 +755,7 @@ export default function SearchApp({
   const [teamHistoryStandings, setTeamHistoryStandings] = useState<TeamStanding[]>([])
   const [teamStandingsLoading, setTeamStandingsLoading] = useState(false)
   const [checkedTeamNames, setCheckedTeamNames] = useState<Set<string>>(new Set())
+  const [teamTableOpen, setTeamTableOpen] = useState(false)
   const [teamAnalysis, setTeamAnalysis] = useState<TeamAnalysis | null>(null)
 
   // Resizable columns (desktop)
@@ -2516,9 +2517,18 @@ export default function SearchApp({
 
                 <div className="flex flex-col gap-4 md:flex-row md:items-start">
                   <div className="flex-1 min-w-0">
-                    <h3 className="mb-3 text-sm font-bold text-white">
-                      第{currentMeet?.round}回 全チーム順位
-                    </h3>
+                    <button
+                      className="mb-3 flex w-full items-center justify-between text-left md:cursor-default"
+                      onClick={() => setTeamTableOpen((v) => !v)}
+                    >
+                      <h3 className="text-sm font-bold text-white">
+                        第{currentMeet?.round}回 全チーム順位
+                      </h3>
+                      <span className="text-xs text-slate-400 md:hidden">
+                        {teamTableOpen ? '▲ 閉じる' : '▼ 開く'}
+                      </span>
+                    </button>
+                    <div className={`${teamTableOpen ? '' : 'hidden'} md:block`}>
                     {usesCorrectedScoreDisplay && (
                       <div className="mb-3 rounded-xl border border-yellow-500/60 bg-yellow-950/40 px-4 py-3 text-xs leading-relaxed text-yellow-100">
                         <p className="font-bold text-yellow-300">第{currentMeet?.round}回のPDF公式得点について</p>
@@ -2638,6 +2648,7 @@ export default function SearchApp({
                         })}
                       </tbody>
                     </table>
+                    </div>
                     </div>
                   </div>
 
