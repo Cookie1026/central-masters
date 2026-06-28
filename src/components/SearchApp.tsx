@@ -3,6 +3,8 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import Image from 'next/image'
 import { getAthleteProfile } from '@/data/athlete-profiles'
+import AllMeetsAnalysis from '@/components/AllMeetsAnalysis'
+import RelayOptimizer from '@/components/RelayOptimizer'
 import type {
   MeetOption,
   EventOption,
@@ -27,7 +29,7 @@ interface Props {
 
 type TeamGroup = TeamOption & { ids: number[]; displayName: string }
 type EventGroup = EventOption & { ids: number[] }
-type MainTab = 'results' | 'team' | 'athlete'
+type MainTab = 'results' | 'team' | 'relay-optimize' | 'athlete'
 type ResultFilter = 'all' | 'individual' | 'relay'
 type AthleteDetailView = 'overview' | 'trends' | 'records'
 type AthleteHistoryIdentity = {
@@ -782,6 +784,7 @@ export default function SearchApp({
   const [checkedTeamNames, setCheckedTeamNames] = useState<Set<string>>(new Set())
   const [teamTableOpen, setTeamTableOpen] = useState(true)
   const [scoreBreakdownOpen, setScoreBreakdownOpen] = useState(true)
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false)
   const [teamAnalysis, setTeamAnalysis] = useState<TeamAnalysis | null>(null)
 
   // Resizable columns (desktop)
@@ -1156,7 +1159,7 @@ export default function SearchApp({
       const params = new URLSearchParams(window.location.search)
       const tab = params.get('tab')
       const legacyResultTabs = ['all', 'individual', 'relay']
-      const validTabs: MainTab[] = ['results', 'team', 'athlete']
+      const validTabs: MainTab[] = ['results', 'team', 'relay-optimize', 'athlete']
       const restoredTab: MainTab = validTabs.includes(tab as MainTab)
         ? (tab as MainTab)
         : legacyResultTabs.includes(tab ?? '')
@@ -1190,10 +1193,12 @@ export default function SearchApp({
 
   const handleAthleteClick = useCallback((r: IndividualResult) => {
     fetchAthleteHistory(r.player_id, r.dt_player_person.name, r.dt_player_person.gender, r.dt_player_person.mst_team.name)
+    setMobileDrawerOpen(true)
   }, [fetchAthleteHistory])
 
   const handleRelayMemberClick = useCallback((m: RelayMember) => {
     fetchAthleteHistory(m.player_id, m.dt_player_person?.name ?? '', m.dt_player_person?.gender ?? '')
+    setMobileDrawerOpen(true)
   }, [fetchAthleteHistory])
 
   // 名前重複排除 + 女性→男性・年齢昇順（APIのソートを保持しつつ重複除去）
@@ -1850,6 +1855,7 @@ export default function SearchApp({
   const mainTabs: { id: MainTab; label: string; count?: number; disabled?: boolean }[] = [
     { id: 'results', label: '競技結果', count: results.length + relayResults.length },
     { id: 'team', label: 'チーム順位' },
+    { id: 'relay-optimize', label: 'リレー最適化', disabled: !meetId || !selectedTeam },
     { id: 'athlete', label: '選手詳細', disabled: !athleteForHistory },
   ]
 
@@ -2284,6 +2290,22 @@ export default function SearchApp({
             )}
           </>
         )}
+        {activeTab === 'relay-optimize' && (
+          <div className="max-w-5xl mx-auto">
+            {!meetId || !selectedTeam ? (
+              <p className="text-center py-16 text-slate-500 text-sm">
+                大会とチームを選択してください
+              </p>
+            ) : (
+              <RelayOptimizer
+                eventId={meetId}
+                teamId={selectedTeam.ids[0]}
+                teamName={selectedTeam.displayName}
+                meetRound={currentMeet?.round ?? 0}
+              />
+            )}
+          </div>
+        )}
         {activeTab === 'team' && (
           <div className="max-w-5xl mx-auto">
             {teamStandingsLoading ? (
@@ -2294,189 +2316,11 @@ export default function SearchApp({
             ) : teamStandings.length === 0 ? (
               <p className="text-center py-16 text-slate-500 text-sm">この大会のチーム順位が見つかりません</p>
             ) : !meetId ? (
-              (() => {
-                const ootakaRows = teamStandings.filter((standing) => isFocusTeam(standing.mst_team.name))
-                const totalPoints = ootakaRows.reduce((sum, standing) => sum + Number(standing.total_points ?? 0), 0)
-                const malePoints = ootakaRows.reduce((sum, standing) => sum + Number(standing.male_points ?? 0), 0)
-                const femalePoints = ootakaRows.reduce((sum, standing) => sum + Number(standing.female_points ?? 0), 0)
-                const mixedPoints = ootakaRows.reduce((sum, standing) => sum + Number(standing.mixed_points ?? 0), 0)
-                const scoredPoints = malePoints + femalePoints + mixedPoints
-                const ratio = (value: number) => scoredPoints > 0 ? (value / scoredPoints) * 100 : 0
-                return (
-                  <div>
-                    {ootakaRows.length === 0 ? (
-                      <p className="text-center py-16 text-slate-500 text-sm">{focusTeamDisplayName}の順位履歴が見つかりません</p>
-                    ) : (
-                      <>
-                        <div className="grid grid-cols-2 gap-3 mb-5 sm:grid-cols-4">
-                          <div className="rounded-lg border border-slate-700 bg-slate-800/70 p-3 text-center">
-                            <div className="text-lg font-bold text-white">{ootakaRows.length}回</div>
-                            <div className="text-[10px] text-slate-500">順位記録</div>
-                          </div>
-                          <div className="rounded-lg border border-slate-700 bg-slate-800/70 p-3 text-center">
-                            <div className="text-lg font-bold text-cyan-300">{Math.min(...ootakaRows.map((row) => row.rank ?? 999))}位</div>
-                            <div className="text-[10px] text-slate-500">過去最高順位</div>
-                          </div>
-                          <div className="rounded-lg border border-slate-700 bg-slate-800/70 p-3 text-center">
-                            <div className="text-lg font-bold text-amber-300">{formatPoints(totalPoints)}pt</div>
-                            <div className="text-[10px] text-slate-500">累計得点</div>
-                          </div>
-                          <div className="rounded-lg border border-slate-700 bg-slate-800/70 p-3 text-center">
-                            <div className="text-lg font-bold text-white">
-                              {formatPoints(totalPoints / Math.max(ootakaRows.length, 1))}pt
-                            </div>
-                            <div className="text-[10px] text-slate-500">大会平均</div>
-                          </div>
-                        </div>
-
-                        <TeamProgressChart standings={ootakaRows} onRoundSelect={(id) => setMeetId(id)} teamName={focusTeamDisplayName} />
-
-                        <div className="mt-5 rounded-xl border border-slate-700 bg-slate-800/60 p-4">
-                          <h3 className="text-sm font-bold text-white mb-4">累計得点の構成</h3>
-                          <div className="space-y-3">
-                            {[
-                              ['男子', malePoints, 'bg-sky-500'],
-                              ['女子', femalePoints, 'bg-rose-500'],
-                              ['混合', mixedPoints, 'bg-purple-500'],
-                            ].map(([label, value, color]) => {
-                              const points = Number(value)
-                              return (
-                                <div key={String(label)} className="grid grid-cols-[36px_1fr_70px] items-center gap-3 text-xs">
-                                  <span className="text-slate-400">{label}</span>
-                                  <div className="h-2.5 overflow-hidden rounded-full bg-slate-700">
-                                    <div className={`h-full rounded-full ${color}`} style={{ width: `${ratio(points)}%` }} />
-                                  </div>
-                                  <span className="text-right font-mono text-slate-300">{formatPoints(points)}pt</span>
-                                </div>
-                              )
-                            })}
-                          </div>
-                        </div>
-
-                        {isOotakaFocus && teamAnalysis?.totals && (
-                          <>
-                            {(() => {
-                              const confirmed = teamAnalysis.totals.individualPoints + teamAnalysis.totals.relayPoints
-                              const official = teamAnalysis.totals.officialPoints
-                              const coverage = official > 0 ? (confirmed / official) * 100 : 0
-                              if (coverage >= 99.9) return null
-                              return (
-                                <div className="mt-5 rounded-xl border border-amber-700/40 bg-amber-950/20 px-4 py-3">
-                                  <div className="flex flex-wrap items-center justify-between gap-2">
-                                    <div>
-                                      <p className="text-xs font-bold text-amber-300">選手別得点は確認済みデータのみ</p>
-                                      <p className="mt-1 text-[11px] leading-relaxed text-slate-400">
-                                        第74〜79回は元の競技結果CSVに得点情報がないため、順位と記録フラグから復元できた得点を表示しています。
-                                      </p>
-                                    </div>
-                                    <div className="text-right">
-                                      <div className="text-lg font-bold text-amber-300">{coverage.toFixed(1)}%</div>
-                                      <div className="text-[10px] text-slate-500">公式総合点に対する確認率</div>
-                                    </div>
-                                  </div>
-                                </div>
-                              )
-                            })()}
-                          <div className="mt-5 grid gap-5 lg:grid-cols-2">
-                            <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-4">
-                              <h3 className="text-sm font-bold text-white mb-1">個人・リレー得点比</h3>
-                              <p className="text-[10px] text-slate-500 mb-4">確認できた競技結果データから集計</p>
-                              {(() => {
-                                const individual = teamAnalysis.totals.individualPoints
-                                const relay = teamAnalysis.totals.relayPoints
-                                const total = individual + relay
-                                const individualRatio = total > 0 ? (individual / total) * 100 : 0
-                                return (
-                                  <>
-                                    <div className="flex h-6 overflow-hidden rounded-full bg-slate-700">
-                                      <div className="bg-sky-500" style={{ width: `${individualRatio}%` }} />
-                                      <div className="bg-indigo-500" style={{ width: `${100 - individualRatio}%` }} />
-                                    </div>
-                                    <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
-                                      <div>
-                                        <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-sky-500" />
-                                        <span className="text-slate-400">個人</span>
-                                        <div className="mt-1 font-mono text-base font-bold text-white">
-                                          {formatPoints(individual)}pt
-                                        </div>
-                                      </div>
-                                      <div>
-                                        <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-indigo-500" />
-                                        <span className="text-slate-400">リレー</span>
-                                        <div className="mt-1 font-mono text-base font-bold text-white">
-                                          {formatPoints(relay)}pt
-                                        </div>
-                                      </div>
-                                    </div>
-                                  </>
-                                )
-                              })()}
-                            </div>
-
-                            <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-4">
-                              <h3 className="text-sm font-bold text-white mb-1">個人得点の男女比</h3>
-                              <p className="text-[10px] text-slate-500 mb-4">得点を獲得した個人競技が対象</p>
-                              {(() => {
-                                const male = teamAnalysis.totals.genderPoints['男子'] ?? 0
-                                const female = teamAnalysis.totals.genderPoints['女子'] ?? 0
-                                const total = male + female
-                                const maleRatio = total > 0 ? (male / total) * 100 : 0
-                                return (
-                                  <>
-                                    <div className="flex h-6 overflow-hidden rounded-full bg-slate-700">
-                                      <div className="bg-sky-500" style={{ width: `${maleRatio}%` }} />
-                                      <div className="bg-rose-500" style={{ width: `${100 - maleRatio}%` }} />
-                                    </div>
-                                    <div className="mt-3 flex justify-between text-xs">
-                                      <span className="text-sky-300">男性 {maleRatio.toFixed(1)}%</span>
-                                      <span className="text-rose-300">女性 {(100 - maleRatio).toFixed(1)}%</span>
-                                    </div>
-                                  </>
-                                )
-                              })()}
-                            </div>
-                          </div>
-                          </>
-                        )}
-
-                        {isOotakaFocus && teamAnalysis && teamAnalysis.athleteScores.length > 0 && (
-                          <div className="mt-5 rounded-xl border border-slate-700 bg-slate-800/60 p-4">
-                            <div className="flex items-end justify-between gap-3 mb-4">
-                              <div>
-                                <h3 className="text-sm font-bold text-white">得点獲得選手ランキング</h3>
-                                <p className="text-[10px] text-slate-500 mt-0.5">確認できた個人競技の累計得点・上位10名</p>
-                              </div>
-                              <span className="text-[10px] text-slate-600">{teamAnalysis.athleteScores.length}名が得点</span>
-                            </div>
-                            <div className="space-y-2.5">
-                              {teamAnalysis.athleteScores.slice(0, 10).map((athlete, index) => {
-                                const maxPoints = teamAnalysis.athleteScores[0]?.points ?? 1
-                                return (
-                                  <div key={athlete.playerId} className="grid grid-cols-[24px_minmax(90px,150px)_1fr_58px] items-center gap-2 text-xs">
-                                    <span className={`text-center font-bold ${index < 3 ? 'text-amber-400' : 'text-slate-500'}`}>
-                                      {index + 1}
-                                    </span>
-                                    <span className={athlete.gender === '男子' ? 'truncate text-sky-300' : 'truncate text-rose-300'}>
-                                      {athlete.name}
-                                    </span>
-                                    <div className="h-3 overflow-hidden rounded-full bg-slate-700">
-                                      <div
-                                        className={athlete.gender === '男子' ? 'h-full rounded-full bg-sky-500' : 'h-full rounded-full bg-rose-500'}
-                                        style={{ width: `${(athlete.points / maxPoints) * 100}%` }}
-                                      />
-                                    </div>
-                                    <span className="text-right font-mono text-slate-300">{formatPoints(athlete.points)}pt</span>
-                                  </div>
-                                )
-                              })}
-                            </div>
-                          </div>
-                        )}
-                      </>
-                    )}
-                  </div>
-                )
-              })()
+              <AllMeetsAnalysis
+                standings={teamHistoryStandings}
+                onRoundSelect={(eventId) => setMeetId(eventId)}
+                focusTeamName={focusTeamDisplayName}
+              />
             ) : (() => {
               const historyRows = teamHistoryStandings
                 .filter((standing) => isFocusTeam(standing.mst_team.name))
@@ -2766,7 +2610,7 @@ export default function SearchApp({
                               <div
                                 key={athlete.playerId}
                                 className="grid grid-cols-[20px_minmax(80px,1fr)_1fr_50px] items-center gap-2 text-xs cursor-pointer hover:bg-slate-700/50 rounded px-1 -mx-1 py-0.5"
-                                onClick={() => fetchAthleteHistory(athlete.playerId, athlete.name, athlete.gender, selectedTeam?.name ?? '')}
+                                onClick={() => { fetchAthleteHistory(athlete.playerId, athlete.name, athlete.gender, selectedTeam?.name ?? ''); setMobileDrawerOpen(true) }}
                               >
                                 <span className={`text-center font-bold ${index < 3 ? 'text-amber-400' : 'text-slate-400'}`}>
                                   {index + 1}
@@ -2892,10 +2736,10 @@ export default function SearchApp({
                   )}
                   <button
                     type="button"
-                    onClick={() => handleTabChange('athlete')}
-                    className="mt-3 w-full rounded-lg border border-sky-700/60 bg-sky-900/40 px-3 py-2 text-xs font-semibold text-sky-300 hover:bg-sky-900/70 hover:text-sky-200 transition-colors"
+                    onClick={() => { setMobileDrawerOpen(false); handleTabChange('athlete') }}
+                    className="mt-3 w-full rounded-lg bg-sky-600 hover:bg-sky-500 px-3 py-2 text-xs font-bold text-white transition-colors"
                   >
-                    選手を詳しく見る →
+                    詳しく見る →
                   </button>
                 </div>
                 {athleteHistory.map((meet) => {
@@ -3007,6 +2851,101 @@ export default function SearchApp({
         )}
 
         <div className="flex-1 overflow-hidden min-h-0">{resultsArea}</div>
+      </div>
+
+      {/* Mobile athlete drawer — slides in from right */}
+      <div className={`md:hidden fixed inset-0 z-50 transition-all duration-300 ${mobileDrawerOpen ? 'visible' : 'invisible pointer-events-none'}`}>
+        {/* Backdrop */}
+        <div
+          className={`absolute inset-0 bg-black/60 transition-opacity duration-300 ${mobileDrawerOpen ? 'opacity-100' : 'opacity-0'}`}
+          onClick={() => setMobileDrawerOpen(false)}
+        />
+        {/* Drawer panel */}
+        <div className={`absolute right-0 top-0 h-full w-[88vw] max-w-sm bg-slate-900 border-l border-slate-700 flex flex-col transition-transform duration-300 ease-out ${mobileDrawerOpen ? 'translate-x-0' : 'translate-x-full'}`}>
+          {/* Header */}
+          <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700 shrink-0 bg-slate-800">
+            <span className="text-sm font-bold text-white">過去レース記録</span>
+            <button
+              onClick={() => setMobileDrawerOpen(false)}
+              className="flex items-center gap-1 text-xs font-semibold text-sky-400 hover:text-sky-300 transition-colors"
+              aria-label="閉じる"
+            >
+              ← 戻る
+            </button>
+          </div>
+          {/* Content */}
+          <div className="overflow-y-auto flex-1">
+            {historyLoading ? (
+              <div className="flex items-center justify-center gap-2 py-16 text-slate-500 text-sm">
+                <span className="w-4 h-4 border-2 border-sky-500 border-t-transparent rounded-full animate-spin" />
+                読込中…
+              </div>
+            ) : !athleteHistory || !athleteForHistory ? (
+              <div className="p-5 text-sm text-slate-500">記録が見つかりません</div>
+            ) : (
+              <div className="p-4 flex flex-col gap-5">
+                <div>
+                  <div className="flex items-baseline gap-2 flex-wrap">
+                    <span className="text-lg font-bold text-white">{athleteForHistory.name}</span>
+                    <span className={`text-xs font-medium ${athleteForHistory.gender === '男子' ? 'text-sky-400' : 'text-rose-400'}`}>
+                      {genderDisplay(athleteForHistory.gender)}
+                    </span>
+                  </div>
+                  {athleteForHistory.teamName && (
+                    <div className="text-xs text-slate-400 mt-0.5">{teamDisplayName(athleteForHistory.teamName)}</div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => { setMobileDrawerOpen(false); handleTabChange('athlete') }}
+                    className="mt-3 w-full rounded-xl bg-sky-600 hover:bg-sky-500 px-4 py-3 text-sm font-bold text-white transition-colors shadow-lg shadow-sky-900/40"
+                  >
+                    詳しく見る →
+                  </button>
+                </div>
+                {athleteHistory.map((meet) => {
+                  const indPts = meet.individual.reduce((s, r) => s + (r.points ?? 0), 0)
+                  const relPts = meet.relay.reduce((s, r) => s + (r.team_points ?? 0) / 4, 0)
+                  const totalPts = indPts + relPts
+                  return (
+                    <div key={meet.round}>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-bold text-sky-400">第{meet.round}回（{meet.pool_type}）</span>
+                        {totalPts > 0 && <span className="text-xs text-amber-400 font-medium">{formatPoints(totalPts)}pt</span>}
+                      </div>
+                      <table className="w-full text-xs">
+                        <tbody>
+                          {meet.individual.map((r, i) => (
+                            <tr key={i} className="border-t border-slate-700/40">
+                              <td className="py-1.5 pr-1 text-slate-100">{r.event}</td>
+                              <td className="py-1.5 pr-2 text-slate-300 whitespace-nowrap">{r.age_group}</td>
+                              <td className="py-1.5 pr-2 font-mono text-white whitespace-nowrap">
+                                {r.time_display ?? '－'}
+                                {r.is_meet_record && <span className="ml-1 text-amber-400">★</span>}
+                              </td>
+                              <td className="py-1.5 text-right text-white whitespace-nowrap font-medium">
+                                {r.rank != null ? `${r.rank}位` : ''}
+                              </td>
+                            </tr>
+                          ))}
+                          {meet.relay.map((r, i) => (
+                            <tr key={`relay-${i}`} className="border-t border-slate-700/40">
+                              <td className="py-1.5 pr-1 text-indigo-300">R {r.event}</td>
+                              <td className="py-1.5 pr-2 text-slate-300 whitespace-nowrap">{r.age_group ?? ''}</td>
+                              <td className="py-1.5 pr-2 font-mono text-white whitespace-nowrap">{r.time_display ?? '－'}</td>
+                              <td className="py-1.5 text-right text-white whitespace-nowrap font-medium">
+                                {r.rank != null ? `${r.rank}位` : ''}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   )
