@@ -2514,7 +2514,7 @@ export default function SearchApp({
                   </>
                 )}
 
-                <div className="flex gap-4 items-start">
+                <div className="flex flex-col gap-4 md:flex-row md:items-start">
                   <div className="flex-1 min-w-0">
                     <h3 className="mb-3 text-sm font-bold text-white">
                       第{currentMeet?.round}回 全チーム順位
@@ -2529,7 +2529,7 @@ export default function SearchApp({
                       </div>
                     )}
                     <div className="overflow-x-auto rounded-xl border border-slate-700">
-                    <table className="w-full min-w-[590px] text-sm">
+                    <table className="w-full min-w-[280px] sm:min-w-[590px] text-sm">
                       <thead>
                         <tr className="bg-gradient-to-r from-sky-950 to-indigo-950 text-slate-300 border-b border-sky-800/40">
                           <th className="px-2 py-3 text-center text-xs font-semibold w-8">比較</th>
@@ -2538,16 +2538,16 @@ export default function SearchApp({
                           <th className="px-3 py-3 text-right text-xs font-semibold">
                             {usesCorrectedScoreDisplay ? '補正得点' : '総合'}
                           </th>
-                          <th className="px-3 py-3 text-right text-xs font-semibold">
+                          <th className="hidden sm:table-cell px-3 py-3 text-right text-xs font-semibold">
                             {usesCorrectedScoreDisplay ? 'PDF記載' : '自主計算'}
                           </th>
-                          <th className="px-3 py-3 text-right text-xs font-semibold">
+                          <th className="hidden sm:table-cell px-3 py-3 text-right text-xs font-semibold">
                             {usesCorrectedScoreDisplay ? '男子(PDF)' : '男子'}
                           </th>
-                          <th className="px-3 py-3 text-right text-xs font-semibold">
+                          <th className="hidden sm:table-cell px-3 py-3 text-right text-xs font-semibold">
                             {usesCorrectedScoreDisplay ? '女子(PDF)' : '女子'}
                           </th>
-                          <th className="px-3 py-3 text-right text-xs font-semibold">
+                          <th className="hidden sm:table-cell px-3 py-3 text-right text-xs font-semibold">
                             {usesCorrectedScoreDisplay ? '混合(PDF)' : '混合'}
                           </th>
                         </tr>
@@ -2601,7 +2601,7 @@ export default function SearchApp({
                                   <td className="px-3 py-2.5 text-right font-semibold text-amber-300">
                                     {calculatedPoints == null ? '－' : formatPoints(calculatedPoints)}
                                   </td>
-                                  <td className="px-3 py-2.5 text-right font-mono text-slate-400">
+                                  <td className="hidden sm:table-cell px-3 py-2.5 text-right font-mono text-slate-400">
                                     {standing.total_points != null ? formatPoints(officialPoints) : '－'}
                                   </td>
                                 </>
@@ -2610,7 +2610,7 @@ export default function SearchApp({
                                   <td className="px-3 py-2.5 text-right font-semibold text-sky-400">
                                     {standing.total_points != null ? formatPoints(officialPoints) : '－'}
                                   </td>
-                                  <td className="px-3 py-2.5 text-right whitespace-nowrap font-mono">
+                                  <td className="hidden sm:table-cell px-3 py-2.5 text-right whitespace-nowrap font-mono">
                                     {calculatedPoints == null || pointDifference == null ? (
                                       <span className="text-slate-500">－</span>
                                     ) : (
@@ -2624,13 +2624,13 @@ export default function SearchApp({
                                   </td>
                                 </>
                               )}
-                              <td className="px-3 py-2.5 text-right text-slate-200">
+                              <td className="hidden sm:table-cell px-3 py-2.5 text-right text-slate-200">
                                 {standing.male_points != null ? formatPoints(Number(standing.male_points)) : '－'}
                               </td>
-                              <td className="px-3 py-2.5 text-right text-slate-200">
+                              <td className="hidden sm:table-cell px-3 py-2.5 text-right text-slate-200">
                                 {standing.female_points != null ? formatPoints(Number(standing.female_points)) : '－'}
                               </td>
-                              <td className="px-3 py-2.5 text-right text-slate-200">
+                              <td className="hidden sm:table-cell px-3 py-2.5 text-right text-slate-200">
                                 {standing.mixed_points != null ? formatPoints(Number(standing.mixed_points)) : '－'}
                               </td>
                             </tr>
@@ -2642,7 +2642,7 @@ export default function SearchApp({
                   </div>
 
                   {meetPlayerScores.length > 0 && (
-                    <div className="w-72 shrink-0">
+                    <div className="w-full md:w-72 md:shrink-0">
                       <h3 className="mb-3 text-sm font-bold text-white">
                         {focusTeamDisplayName} 取得得点
                       </h3>
