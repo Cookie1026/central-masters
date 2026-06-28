@@ -2,20 +2,42 @@
 
 import { useState, useEffect } from 'react'
 
+interface RelayMember {
+  swim_order: number
+  stroke: string
+  name: string
+  splitSeconds: number | null
+}
+
+interface OptimalMember {
+  swim_order: number
+  stroke: string
+  name: string
+  splitSeconds: number
+  source: 'individual' | 'relay'
+}
+
+interface CandidateInfo {
+  order: number
+  stroke: string
+  count: number
+}
+
 interface OptimizedRelay {
   categoryName: string
   ageGroup: string
+  relayStroke: string
   actualRank: number | null
   actualTeamTime: number
   actualPoints: number
-  actualMembers: { name: string; splitSeconds: number | null }[]
+  actualMembers: RelayMember[]
   optimalRank: number
   optimalTime: number
   optimalPoints: number
-  optimalMembers: { name: string; splitSeconds: number; source: 'individual' | 'relay' }[]
+  optimalMembers: OptimalMember[]
   pointsGain: number
   isCurrentOptimal: boolean
-  candidatesCount: number
+  candidatesPerOrder: CandidateInfo[]
 }
 
 interface RelayOptimizeResult {
@@ -77,7 +99,7 @@ export default function RelayOptimizer({ eventId, teamId, teamName, meetRound }:
 
   const { optimizations, totalActualPoints, totalOptimalPoints, totalGain, teamRankings } = data
 
-  // Estimate new team rank if we gained totalGain extra relay points
+  // 現在のチーム順位を特定
   const currentRankRow = teamRankings.find((r) => {
     const n = (r.mst_team as { name: string }).name
     return teamName.includes(n) || n.includes(teamName.split(/[　\s]/)[0])
@@ -143,8 +165,8 @@ export default function RelayOptimizer({ eventId, teamId, teamName, meetRound }:
       {/* Context note */}
       <div className="rounded-xl border border-slate-700/50 bg-slate-800/30 px-4 py-3">
         <p className="text-[11px] text-slate-500 leading-relaxed">
-          ※ 最適化は個人種目の結果からスプリットタイムを推計しています。実際のリレー泳順・飛込タイムは考慮していません。
-          また年齢区分の制約（合計年齢）を考慮して組み合わせを選んでいます。
+          ※ メドレーリレーは泳順（背泳ぎ→平泳ぎ→バタフライ→フリー）を考慮した上で最適な組み合わせを計算します。
+          個人種目のタイムをスプリットタイムとして使用しています。実際のリレー飛込タイムは考慮していません。
           あくまでも参考値としてご活用ください。
         </p>
       </div>
@@ -152,11 +174,23 @@ export default function RelayOptimizer({ eventId, teamId, teamName, meetRound }:
   )
 }
 
+// ストロークの短縮表示
+const STROKE_SHORT: Record<string, string> = {
+  '背泳ぎ': 'Back',
+  '平泳ぎ': 'Breast',
+  'バタフライ': 'Fly',
+  '自由形': 'Free',
+}
+
 function RelayCard({ opt }: { opt: OptimizedRelay }) {
   const [open, setOpen] = useState(false)
   const gain = opt.pointsGain
   const improved = gain > 0
   const same = opt.isCurrentOptimal
+  const isMedley = opt.relayStroke.includes('メドレー')
+
+  // 候補者数の合計（泳順別表示用）
+  const totalCandidates = opt.candidatesPerOrder.reduce((s, c) => s + c.count, 0)
 
   return (
     <div className={`rounded-xl border overflow-hidden ${improved ? 'border-emerald-700/40' : 'border-slate-700/40'}`}>
@@ -191,14 +225,20 @@ function RelayCard({ opt }: { opt: OptimizedRelay }) {
       {/* Detail */}
       {open && (
         <div className="px-4 py-3 bg-slate-900/40 grid gap-4 sm:grid-cols-2">
-          {/* Actual */}
+          {/* Actual members */}
           <div>
             <p className="text-[10px] font-bold text-slate-400 mb-2">実際のメンバー</p>
             <div className="space-y-1">
-              {opt.actualMembers.map((m, i) => (
-                <div key={i} className="flex items-center justify-between text-xs">
-                  <span className="text-slate-200">{i + 1}. {m.name}</span>
-                  <span className="font-mono text-slate-400">
+              {opt.actualMembers.map((m) => (
+                <div key={m.swim_order} className="flex items-center gap-2 text-xs">
+                  <span className="shrink-0 w-4 text-center text-slate-500 font-bold">{m.swim_order}</span>
+                  {isMedley && (
+                    <span className="shrink-0 text-[9px] text-sky-400 bg-sky-950/60 px-1 rounded font-semibold">
+                      {STROKE_SHORT[m.stroke] ?? m.stroke}
+                    </span>
+                  )}
+                  <span className="flex-1 text-slate-200 truncate">{m.name}</span>
+                  <span className="font-mono text-slate-400 shrink-0">
                     {m.splitSeconds ? formatTime(m.splitSeconds) : '－'}
                   </span>
                 </div>
@@ -210,17 +250,23 @@ function RelayCard({ opt }: { opt: OptimizedRelay }) {
             </div>
           </div>
 
-          {/* Optimal */}
+          {/* Optimal members */}
           <div>
             <p className="text-[10px] font-bold text-emerald-400 mb-2">
               最適メンバー
-              <span className="text-slate-500 font-normal ml-1">（候補{opt.candidatesCount}名から選択）</span>
+              <span className="text-slate-500 font-normal ml-1">（候補{totalCandidates}名）</span>
             </p>
             <div className="space-y-1">
-              {opt.optimalMembers.map((m, i) => (
-                <div key={i} className="flex items-center justify-between text-xs">
-                  <span className={same ? 'text-slate-200' : 'text-emerald-200'}>{i + 1}. {m.name}</span>
-                  <div className="flex items-center gap-1">
+              {opt.optimalMembers.map((m) => (
+                <div key={m.swim_order} className="flex items-center gap-2 text-xs">
+                  <span className="shrink-0 w-4 text-center text-slate-500 font-bold">{m.swim_order}</span>
+                  {isMedley && (
+                    <span className="shrink-0 text-[9px] text-sky-400 bg-sky-950/60 px-1 rounded font-semibold">
+                      {STROKE_SHORT[m.stroke] ?? m.stroke}
+                    </span>
+                  )}
+                  <span className={`flex-1 truncate ${same ? 'text-slate-200' : 'text-emerald-200'}`}>{m.name}</span>
+                  <div className="flex items-center gap-1 shrink-0">
                     <span className="font-mono text-slate-400">{formatTime(m.splitSeconds)}</span>
                     {m.source === 'individual' && (
                       <span className="text-[9px] text-sky-500 bg-sky-950/50 px-1 rounded">個人</span>
@@ -240,6 +286,17 @@ function RelayCard({ opt }: { opt: OptimizedRelay }) {
                 </span>
               </div>
             </div>
+
+            {/* 泳順ごとの候補者数（メドレーのみ表示） */}
+            {isMedley && (
+              <div className="mt-2 flex flex-wrap gap-1">
+                {opt.candidatesPerOrder.map((c) => (
+                  <span key={c.order} className="text-[9px] text-slate-500 bg-slate-800/60 px-1.5 py-0.5 rounded">
+                    {c.order}({STROKE_SHORT[c.stroke] ?? c.stroke}) {c.count}名
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -11,7 +11,22 @@ export async function GET(request: Request) {
   }
   const eventId = Number(eventIdParam)
 
-  // 1. Get the team's actual relay results for this event
+  // 1. mst_relay マスター取得（泳順 → ストローク対応表）
+  const { data: relayMaster } = await supabaseServer
+    .from('mst_relay')
+    .select('relay_stroke, swim_order, stroke')
+    .order('swim_order', { ascending: true })
+
+  // relay_stroke → Map<swim_order, stroke>
+  const relayOrderMap = new Map<string, Map<number, string>>()
+  for (const row of (relayMaster ?? [])) {
+    if (!relayOrderMap.has(row.relay_stroke)) {
+      relayOrderMap.set(row.relay_stroke, new Map())
+    }
+    relayOrderMap.get(row.relay_stroke)!.set(row.swim_order, row.stroke)
+  }
+
+  // 2. このチームの実際のリレー結果を取得
   const { data: actualRelays, error: relayError } = await supabaseServer
     .from('dt_result_relay')
     .select(`
@@ -32,14 +47,14 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: relayError.message }, { status: 500 })
   }
 
-  // 2. Get all relay results for this event (to know what ranks are possible)
+  // 3. 同大会の全リレー結果（順位予測用）
   const { data: allRelays } = await supabaseServer
     .from('dt_result_relay')
     .select('rank, time_seconds, category_id, age_group_label, combined_age')
     .eq('event_id', eventId)
     .order('rank', { ascending: true })
 
-  // 3. Get all individual results for this team in this event
+  // 4. このチームの全個人結果
   const { data: individualResults } = await supabaseServer
     .from('dt_result_person')
     .select(`
@@ -50,7 +65,7 @@ export async function GET(request: Request) {
     .eq('event_id', eventId)
     .eq('team_id', teamId)
 
-  // Build relay ranking maps per (category_id, age_group_label)
+  // relay ranking maps per (category_id, age_group_label)
   const relayFieldMap = new Map<string, { rank: number; time_seconds: number }[]>()
   for (const r of (allRelays ?? [])) {
     const key = `${r.category_id}:${r.age_group_label}`
@@ -60,7 +75,18 @@ export async function GET(request: Request) {
     }
   }
 
-  // For each actual relay, compute "optimal" combination using split times
+  // stroke → seconds の個人ベストタイムマップ (playerId → Map<stroke, seconds>)
+  const indBestByPlayer = new Map<number, Map<string, number>>()
+  for (const ind of (individualResults ?? [])) {
+    const p = ind.dt_player_person as unknown as { id: number; name: string }
+    const indStroke = (ind.mst_category as { stroke?: string }).stroke ?? ''
+    const t = Number(ind.time_seconds ?? 0)
+    if (!t) continue
+    if (!indBestByPlayer.has(p.id)) indBestByPlayer.set(p.id, new Map())
+    const existing = indBestByPlayer.get(p.id)!.get(indStroke)
+    if (!existing || t < existing) indBestByPlayer.get(p.id)!.set(indStroke, t)
+  }
+
   const optimizations = (actualRelays ?? []).map((relay) => {
     const members = ((relay.dt_player_relay ?? []) as unknown) as {
       id: number
@@ -68,128 +94,190 @@ export async function GET(request: Request) {
       split_seconds: number | null
       dt_player_person: { id: number; name: string; gender: string }
     }[]
+    const sortedMembers = [...members].sort((a, b) => a.swim_order - b.swim_order)
 
     const actualTeamTime = Number(relay.time_seconds ?? 0)
     const actualRank = relay.rank
     const categoryId = (relay.mst_category as unknown as { id: number; name: string }).id
     const categoryName = (relay.mst_category as unknown as { id: number; name: string }).name
+    const relayStroke = (relay.mst_category as unknown as { stroke?: string }).stroke ?? ''
+    const distance = (relay.mst_category as unknown as { distance?: number }).distance ?? 0
     const ageGroup = relay.age_group_label
     const fieldKey = `${categoryId}:${ageGroup}`
     const field = relayFieldMap.get(fieldKey) ?? []
 
-    const stroke = (relay.mst_category as unknown as { stroke?: string }).stroke ?? ''
-    const distance = (relay.mst_category as unknown as { distance?: number }).distance ?? 0
-    // Parse relay count from category name e.g. "4×50mフリーリレー" → 4
+    // リレー人数をカテゴリ名から解析
     const relayCountMatch = categoryName.match(/^(\d+)[×x]/)
     const relayCount = relayCountMatch ? parseInt(relayCountMatch[1], 10) : 4
 
-    // Find athletes from this team who swam the individual equivalent stroke this event
-    const equivalentAthletes = (individualResults ?? [])
-      .filter((ind) => {
+    // mst_relay からこのリレー種別の泳順→ストローク対応を取得
+    const strokeByOrder = relayOrderMap.get(relayStroke)
+    const legDistance = distance / relayCount
+
+    // 各泳順の候補者を収集
+    // - 実際にリレーを泳いだ選手（split_seconds 使用）
+    // - 同ストロークの個人種目を泳いだ選手（individual time 使用）
+    type Candidate = {
+      id: number
+      name: string
+      gender: string
+      seconds: number
+      source: 'relay' | 'individual'
+    }
+
+    const buildCandidatesForOrder = (order: number): Candidate[] => {
+      // この泳順に必要なストローク
+      const fallbackStroke = relayStroke.replace(/リレー.*$/, '').replace(/（混合）/, '').trim() || '自由形'
+      const requiredStroke = strokeByOrder?.get(order) ?? fallbackStroke
+      const candidateMap = new Map<number, Candidate>()
+
+      // リレースプリットタイムを持つ実際のメンバー
+      for (const m of sortedMembers) {
+        if (m.swim_order !== order) continue
+        const t = Number(m.split_seconds ?? 0)
+        if (!t) continue
+        candidateMap.set(m.dt_player_person.id, {
+          id: m.dt_player_person.id,
+          name: m.dt_player_person.name,
+          gender: m.dt_player_person.gender,
+          seconds: t,
+          source: 'relay',
+        })
+      }
+
+      // 同ストローク・同距離の個人タイムを持つ選手（より速ければ上書き）
+      for (const ind of (individualResults ?? [])) {
         const indStroke = (ind.mst_category as { stroke?: string }).stroke ?? ''
         const indDist = (ind.mst_category as { distance?: number }).distance ?? 0
-        return indStroke === stroke && indDist === distance / relayCount
-      })
-      .map((ind) => {
+        if (indStroke !== requiredStroke || indDist !== legDistance) continue
         const p = ind.dt_player_person as unknown as { id: number; name: string; gender: string }
-        return {
-          id: p.id,
-          name: p.name,
-          gender: p.gender,
-          splitSeconds: Number(ind.time_seconds ?? 0),
-          source: 'individual' as const,
+        const t = Number(ind.time_seconds ?? 0)
+        if (!t) continue
+        const existing = candidateMap.get(p.id)
+        if (!existing || t < existing.seconds) {
+          candidateMap.set(p.id, {
+            id: p.id, name: p.name, gender: p.gender,
+            seconds: t, source: 'individual',
+          })
         }
-      })
-
-    // Also include athletes who actually swam this relay (use their split times)
-    const actualMemberIds = new Set(members.map((m) => m.dt_player_person.id))
-    const relayAthletes = members.map((m) => ({
-      id: m.dt_player_person.id,
-      name: m.dt_player_person.name,
-      gender: m.dt_player_person.gender,
-      splitSeconds: Number(m.split_seconds ?? 0),
-      source: 'relay' as const,
-    }))
-
-    type Candidate = { id: number; name: string; gender: string; splitSeconds: number; source: 'relay' | 'individual' }
-    // Merge: prefer individual time if better, else use relay split
-    const allCandidates = new Map<number, Candidate>()
-    for (const a of relayAthletes) allCandidates.set(a.id, a)
-    for (const a of equivalentAthletes) {
-      const existing = allCandidates.get(a.id)
-      if (!existing || (a.splitSeconds > 0 && a.splitSeconds < existing.splitSeconds)) {
-        allCandidates.set(a.id, a)
       }
+
+      return [...candidateMap.values()].filter((c) => c.seconds > 0)
     }
 
-    const candidates = [...allCandidates.values()].filter((a) => a.splitSeconds > 0)
+    // 全泳順の候補者リストを構築
+    const candidatesPerOrder: Candidate[][] = Array.from({ length: relayCount }, (_, i) =>
+      buildCandidatesForOrder(i + 1)
+    )
 
-    let bestCombination: typeof candidates = []
+    // 最適割当: 全泳順の候補から各選手を1回ずつ使って最速組み合わせを探索
+    // 再帰的に全組み合わせを試す（チームサイズが小さいため現実的）
+    type Assignment = { order: number; candidate: Candidate }[]
+
     let bestTime = Infinity
+    let bestAssignment: Assignment = []
 
-    if (candidates.length < relayCount) {
-      bestCombination = candidates.slice(0, relayCount)
-      bestTime = bestCombination.reduce((s, a) => s + a.splitSeconds, 0)
-    } else {
-      const combos = combinations(candidates, relayCount)
-      for (const combo of combos) {
-        const totalTime = combo.reduce((s, a) => s + a.splitSeconds, 0)
-        if (totalTime < bestTime) {
-          bestTime = totalTime
-          bestCombination = combo
+    function search(orderIdx: number, usedIds: Set<number>, current: Assignment) {
+      if (orderIdx === relayCount) {
+        const total = current.reduce((s, a) => s + a.candidate.seconds, 0)
+        if (total < bestTime) {
+          bestTime = total
+          bestAssignment = [...current]
         }
+        return
+      }
+      const candidates = candidatesPerOrder[orderIdx].filter((c) => !usedIds.has(c.id))
+      if (candidates.length === 0) {
+        // この泳順に候補なし → 組み合わせ不成立
+        return
+      }
+      // 上位5人までに絞って計算量を抑える
+      const top = candidates.sort((a, b) => a.seconds - b.seconds).slice(0, 5)
+      for (const c of top) {
+        usedIds.add(c.id)
+        current.push({ order: orderIdx + 1, candidate: c })
+        search(orderIdx + 1, usedIds, current)
+        current.pop()
+        usedIds.delete(c.id)
       }
     }
 
-    // What rank would the optimal time achieve?
+    search(0, new Set(), [])
+
+    // 候補ゼロの泳順があった場合は実測メンバーで代用
+    if (bestAssignment.length < relayCount) {
+      bestTime = actualTeamTime
+      bestAssignment = sortedMembers.map((m) => ({
+        order: m.swim_order,
+        candidate: {
+          id: m.dt_player_person.id,
+          name: m.dt_player_person.name,
+          gender: m.dt_player_person.gender,
+          seconds: Number(m.split_seconds ?? 0),
+          source: 'relay' as const,
+        },
+      }))
+    }
+
+    // 最適タイムで何位になれるか予測
     const fieldSorted = [...field].sort((a, b) => a.time_seconds - b.time_seconds)
     let optimalRank = fieldSorted.length + 1
     for (let i = 0; i < fieldSorted.length; i++) {
-      if (bestTime <= fieldSorted[i].time_seconds) {
-        optimalRank = i + 1
-        break
-      }
+      if (bestTime <= fieldSorted[i].time_seconds) { optimalRank = i + 1; break }
     }
 
-    // Points calculation: 1st=10, 2nd=9, ... 10th=1, beyond=0
     const rankToPoints = (r: number) => Math.max(0, 11 - r)
     const actualPoints = rankToPoints(actualRank ?? 99)
     const optimalPoints = rankToPoints(optimalRank)
     const pointsGain = optimalPoints - actualPoints
 
-    const isCurrentOptimal = actualMemberIds.size === relayCount &&
-      bestCombination.every((a) => actualMemberIds.has(a.id))
+    const actualMemberIds = new Set(sortedMembers.map((m) => m.dt_player_person.id))
+    const isCurrentOptimal = bestAssignment.length === relayCount &&
+      bestAssignment.every((a) => actualMemberIds.has(a.candidate.id))
+
+    // 泳順→ストローク名のラベル（表示用）
+    const getStrokeLabel = (order: number) =>
+      strokeByOrder?.get(order) ?? '自由形'
 
     return {
       categoryName,
       ageGroup,
+      relayStroke,
       actualRank,
       actualTeamTime,
       actualPoints,
-      actualMembers: members.sort((a, b) => a.swim_order - b.swim_order).map((m) => ({
+      actualMembers: sortedMembers.map((m) => ({
+        swim_order: m.swim_order,
+        stroke: getStrokeLabel(m.swim_order),
         name: m.dt_player_person.name,
         splitSeconds: m.split_seconds,
       })),
       optimalRank,
       optimalTime: bestTime,
       optimalPoints,
-      optimalMembers: bestCombination.sort((a, b) => a.splitSeconds - b.splitSeconds).map((a) => ({
-        name: a.name,
-        splitSeconds: a.splitSeconds,
-        source: a.source,
-      })),
+      optimalMembers: bestAssignment
+        .sort((a, b) => a.order - b.order)
+        .map((a) => ({
+          swim_order: a.order,
+          stroke: getStrokeLabel(a.order),
+          name: a.candidate.name,
+          splitSeconds: a.candidate.seconds,
+          source: a.candidate.source,
+        })),
       pointsGain,
       isCurrentOptimal,
-      candidatesCount: candidates.length,
+      candidatesPerOrder: candidatesPerOrder.map((cs, i) => ({
+        order: i + 1,
+        stroke: getStrokeLabel(i + 1),
+        count: cs.length,
+      })),
     }
   })
 
-  // Compute total points gain
   const totalActualPoints = optimizations.reduce((s, o) => s + o.actualPoints, 0)
   const totalOptimalPoints = optimizations.reduce((s, o) => s + o.optimalPoints, 0)
   const totalGain = totalOptimalPoints - totalActualPoints
 
-  // Get team's actual ranking for this event
   const { data: teamRankData } = await supabaseServer
     .from('dt_ranking_team')
     .select('rank, total_points, mst_team(name)')
@@ -203,14 +291,4 @@ export async function GET(request: Request) {
     totalGain,
     teamRankings: (teamRankData ?? []).slice(0, 20),
   })
-}
-
-// Utility: generate all combinations of size k from array
-function combinations<T>(arr: T[], k: number): T[][] {
-  if (k === 0) return [[]]
-  if (arr.length < k) return []
-  const [first, ...rest] = arr
-  const withFirst = combinations(rest, k - 1).map((c) => [first, ...c])
-  const withoutFirst = combinations(rest, k)
-  return [...withFirst, ...withoutFirst]
 }
