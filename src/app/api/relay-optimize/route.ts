@@ -21,7 +21,7 @@ export async function GET(request: Request) {
       mst_age(id, name, min_age, max_age),
       dt_player_relay(
         id, swim_order, split_seconds,
-        dt_player_person!inner(id, name, gender, birth_year)
+        dt_player_person!inner(id, name, gender)
       )
     `)
     .eq('event_id', eventId)
@@ -40,12 +40,11 @@ export async function GET(request: Request) {
     .order('rank', { ascending: true })
 
   // 3. Get all individual results for this team in this event
-  // to understand what athletes swam and their times per stroke/category
   const { data: individualResults } = await supabaseServer
     .from('dt_result_person')
     .select(`
       rank, time_seconds, time_display, points,
-      dt_player_person!inner(id, name, gender, birth_year),
+      dt_player_person!inner(id, name, gender),
       mst_category!inner(id, name, stroke, distance)
     `)
     .eq('event_id', eventId)
@@ -67,7 +66,7 @@ export async function GET(request: Request) {
       id: number
       swim_order: number
       split_seconds: number | null
-      dt_player_person: { id: number; name: string; gender: string; birth_year: number | null }
+      dt_player_person: { id: number; name: string; gender: string }
     }[]
 
     const actualTeamTime = Number(relay.time_seconds ?? 0)
@@ -75,14 +74,9 @@ export async function GET(request: Request) {
     const categoryId = (relay.mst_category as unknown as { id: number; name: string }).id
     const categoryName = (relay.mst_category as unknown as { id: number; name: string }).name
     const ageGroup = relay.age_group_label
-    const combinedAge = relay.combined_age
-
-    // Get current year for age calculation
-    const currentYear = 2026
     const fieldKey = `${categoryId}:${ageGroup}`
     const field = relayFieldMap.get(fieldKey) ?? []
 
-    // Individual results for this event — find athletes with times in matching stroke
     const stroke = (relay.mst_category as unknown as { stroke?: string }).stroke ?? ''
     const distance = (relay.mst_category as unknown as { distance?: number }).distance ?? 0
     // Parse relay count from category name e.g. "4×50mフリーリレー" → 4
@@ -97,12 +91,11 @@ export async function GET(request: Request) {
         return indStroke === stroke && indDist === distance / relayCount
       })
       .map((ind) => {
-        const p = ind.dt_player_person as unknown as { id: number; name: string; gender: string; birth_year: number | null }
+        const p = ind.dt_player_person as unknown as { id: number; name: string; gender: string }
         return {
           id: p.id,
           name: p.name,
           gender: p.gender,
-          age: p.birth_year ? currentYear - p.birth_year : 0,
           splitSeconds: Number(ind.time_seconds ?? 0),
           source: 'individual' as const,
         }
@@ -114,12 +107,11 @@ export async function GET(request: Request) {
       id: m.dt_player_person.id,
       name: m.dt_player_person.name,
       gender: m.dt_player_person.gender,
-      age: m.dt_player_person.birth_year ? currentYear - m.dt_player_person.birth_year : 0,
       splitSeconds: Number(m.split_seconds ?? 0),
       source: 'relay' as const,
     }))
 
-    type Candidate = { id: number; name: string; gender: string; age: number; splitSeconds: number; source: 'relay' | 'individual' }
+    type Candidate = { id: number; name: string; gender: string; splitSeconds: number; source: 'relay' | 'individual' }
     // Merge: prefer individual time if better, else use relay split
     const allCandidates = new Map<number, Candidate>()
     for (const a of relayAthletes) allCandidates.set(a.id, a)
@@ -132,37 +124,20 @@ export async function GET(request: Request) {
 
     const candidates = [...allCandidates.values()].filter((a) => a.splitSeconds > 0)
 
-    // Find best N-person combination satisfying age constraint (if combinedAge is set)
-    // Age constraint: sum of (ages) must be close to combinedAge bracket
     let bestCombination: typeof candidates = []
     let bestTime = Infinity
 
     if (candidates.length < relayCount) {
-      // Not enough candidates — use what we have
       bestCombination = candidates.slice(0, relayCount)
       bestTime = bestCombination.reduce((s, a) => s + a.splitSeconds, 0)
     } else {
-      // Brute force (n choose relayCount) — n is typically small (< 15)
       const combos = combinations(candidates, relayCount)
       for (const combo of combos) {
-        // Check age constraint if applicable
-        if (combinedAge != null && combinedAge > 0) {
-          const sumAge = combo.reduce((s, a) => s + a.age, 0)
-          // Allow some flexibility: must be within the same bracket
-          // We can't easily check the exact bracket without mst_age data,
-          // so we approximate: sumAge should be close to combinedAge ± 40
-          if (Math.abs(sumAge - combinedAge) > 40) continue
-        }
         const totalTime = combo.reduce((s, a) => s + a.splitSeconds, 0)
         if (totalTime < bestTime) {
           bestTime = totalTime
           bestCombination = combo
         }
-      }
-      if (bestCombination.length === 0) {
-        // No age-valid combo, fall back to fastest without constraint
-        bestCombination = candidates.sort((a, b) => a.splitSeconds - b.splitSeconds).slice(0, relayCount)
-        bestTime = bestCombination.reduce((s, a) => s + a.splitSeconds, 0)
       }
     }
 
@@ -220,11 +195,6 @@ export async function GET(request: Request) {
     .select('rank, total_points, mst_team(name)')
     .eq('event_id', eventId)
     .order('rank', { ascending: true })
-
-  const teamRankRow = (teamRankData ?? []).find((r) => {
-    const t = r.mst_team as unknown as { name: string } | null
-    return t && String(t.name)
-  })
 
   return NextResponse.json({
     optimizations,
