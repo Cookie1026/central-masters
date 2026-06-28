@@ -11,9 +11,9 @@ export async function GET(request: Request) {
   }
   const eventId = Number(eventIdParam)
 
-  // 1. mst_relay マスター取得（泳順 → ストローク対応表）
+  // 1. mst_medley_relay マスター取得（メドレーリレーのみ: 泳順 → ストローク対応表）
   const { data: relayMaster } = await supabaseServer
-    .from('mst_relay')
+    .from('mst_medley_relay')
     .select('relay_stroke, swim_order, stroke')
     .order('swim_order', { ascending: true })
 
