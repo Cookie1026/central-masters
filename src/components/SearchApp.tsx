@@ -339,10 +339,11 @@ function TeamProgressChart({
   const minPoints = Math.min(...allPointValues)
   const pointRange = Math.max(maxPoints - minPoints, 1)
 
+  const padBottom = 46
   const rankY = (rank: number) =>
-    padY + ((rank - 1) / Math.max(maxRank - 1, 1)) * (height - padY * 2)
+    padY + ((rank - 1) / Math.max(maxRank - 1, 1)) * (height - padY - padBottom)
   const pointY = (pts: number) =>
-    padY + ((maxPoints - pts) / pointRange) * (height - padY * 2)
+    padY + ((maxPoints - pts) / pointRange) * (height - padY - padBottom)
 
   const ranks = rows.map((row) => row.rank ?? 0).filter((r) => r > 0)
   const rankCoords = rows.map((row) => ({
@@ -359,7 +360,8 @@ function TeamProgressChart({
   return (
     <div className="rounded-xl border border-cyan-900/50 bg-slate-800/60 p-4">
       <div className="flex items-center justify-between gap-3 mb-2">
-        <div>
+        <div className="flex items-center gap-2">
+          <span className="w-1 h-4 rounded bg-amber-400 shrink-0" />
           <h3 className="text-sm font-bold text-white">{teamName ?? 'おおたか'} 大会推移</h3>
           <p className="text-[10px] text-slate-300 mt-0.5">グラフ上側ほど上位・高得点です</p>
         </div>
@@ -772,7 +774,7 @@ export default function SearchApp({
   const [teamHistoryStandings, setTeamHistoryStandings] = useState<TeamStanding[]>([])
   const [teamStandingsLoading, setTeamStandingsLoading] = useState(false)
   const [checkedTeamNames, setCheckedTeamNames] = useState<Set<string>>(new Set())
-  const [teamTableOpen, setTeamTableOpen] = useState(false)
+  const [teamTableOpen, setTeamTableOpen] = useState(true)
   const [scoreBreakdownOpen, setScoreBreakdownOpen] = useState(true)
   const [teamAnalysis, setTeamAnalysis] = useState<TeamAnalysis | null>(null)
 
@@ -946,6 +948,19 @@ export default function SearchApp({
   }, [filteredEvents, eventKey])
 
   const selectedTeam = uniqueTeams.find((t) => normalizeOptionName(t.name) === teamKey)
+
+  // フォーカスチームが変わったとき、そのチームがoverlayに残っていたら除外
+  useEffect(() => {
+    if (!selectedTeam) return
+    setCheckedTeamNames((prev) => {
+      if (!prev.has(selectedTeam.name)) return prev
+      const next = new Set(prev)
+      next.delete(selectedTeam.name)
+      return next
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTeam?.name])
+
   const selectedTeamIds = selectedTeam?.ids ?? []
   const selectedTeamIdsKey = selectedTeamIds.join(',')
   const selectedEvent = filteredEvents.find((e) => e.ids.join(',') === eventKey)
@@ -2512,7 +2527,7 @@ export default function SearchApp({
                         onClick={() => setScoreBreakdownOpen((v) => !v)}
                       >
                         <div className="flex items-center gap-2">
-                          <span className="w-1 h-4 rounded-full bg-sky-400 shrink-0" />
+                          <span className="w-1 h-4 rounded bg-amber-400 shrink-0" />
                           <h3 className="text-sm font-bold text-sky-100">{focusTeamDisplayName}　第{currentMeet.round}回 得点構成</h3>
                         </div>
                         <div className="flex items-center gap-3 shrink-0">
@@ -2541,14 +2556,14 @@ export default function SearchApp({
                   </>
                 )}
 
-                <div className="flex flex-col gap-4 md:flex-row md:items-start">
+                <div className="mt-6 flex flex-col gap-4 md:flex-row md:items-start">
                   <div className="flex-1 min-w-0">
                     <button
                       className="mb-3 flex w-full items-center justify-between gap-3 rounded-xl bg-gradient-to-r from-sky-950/80 to-indigo-950/80 px-4 py-3 text-left hover:from-sky-900/80 hover:to-indigo-900/80 transition-colors md:cursor-default"
                       onClick={() => setTeamTableOpen((v) => !v)}
                     >
                       <div className="flex items-center gap-2">
-                        <span className="w-1 h-4 rounded-full bg-indigo-400 shrink-0" />
+                        <span className="w-1 h-4 rounded bg-amber-400 shrink-0" />
                         <h3 className="text-sm font-bold text-sky-100">
                           第{currentMeet?.round}回 全チーム順位
                         </h3>
@@ -2683,9 +2698,10 @@ export default function SearchApp({
 
                   {meetPlayerScores.length > 0 && (
                     <div className="w-full md:w-72 md:shrink-0">
-                      <h3 className="mb-3 text-sm font-bold text-white">
-                        {focusTeamDisplayName} 取得得点
-                      </h3>
+                      <div className="mb-3 flex items-center gap-2">
+                        <span className="w-1 h-4 rounded bg-amber-400 shrink-0" />
+                        <h3 className="text-sm font-bold text-white">{focusTeamDisplayName} 取得得点</h3>
+                      </div>
                       <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-4">
                         <div className="mb-3 flex items-end justify-between gap-3">
                           <p className="text-[10px] text-slate-300">第{currentMeet?.round}回 個人+リレー（均等配分）</p>
