@@ -258,42 +258,88 @@ function AthleteTrendCard({ trend }: { trend: AthleteTrend }) {
   )
 }
 
+const OVERLAY_COLORS = ['#f97316', '#a855f7', '#22c55e', '#ec4899', '#eab308', '#14b8a6']
+
 function TeamProgressChart({
   standings,
+  overlayTeams = [],
   selectedRound,
   onRoundSelect,
   teamName,
 }: {
   standings: TeamStanding[]
+  overlayTeams?: { name: string; standings: TeamStanding[]; color: string }[]
   selectedRound?: number
   onRoundSelect?: (eventId: number) => void
   teamName?: string
 }) {
   const [showRank, setShowRank] = useState(true)
   const [showPoints, setShowPoints] = useState(false)
+
   const rows = standings
     .filter((standing) => standing.mst_event)
     .sort((a, b) => (a.mst_event?.round ?? 0) - (b.mst_event?.round ?? 0))
+
+  const overlayRows = overlayTeams.map((t) => ({
+    ...t,
+    rows: t.standings
+      .filter((s) => s.mst_event)
+      .sort((a, b) => (a.mst_event?.round ?? 0) - (b.mst_event?.round ?? 0)),
+  }))
+
   const width = 720
   const height = 180
   const padX = 42
   const padY = 24
-  const ranks = rows.map((row) => row.rank ?? 0).filter((rank) => rank > 0)
-  const maxRank = Math.max(...ranks, 3)
-  const pointValues = rows.map((row) => Number(row.total_points ?? 0))
-  const maxPoints = Math.max(...pointValues, 1)
-  const minPoints = Math.min(...pointValues)
+
+  // X軸: 全チームの回数を統合
+  const allRoundNumbers = [
+    ...new Set([
+      ...rows.map((r) => r.mst_event?.round ?? 0),
+      ...overlayRows.flatMap((t) => t.rows.map((r) => r.mst_event?.round ?? 0)),
+    ]),
+  ]
+    .filter((r) => r > 0)
+    .sort((a, b) => a - b)
+
+  const xForRound = (round: number) => {
+    const idx = allRoundNumbers.indexOf(round)
+    return allRoundNumbers.length <= 1
+      ? width / 2
+      : padX + (idx / (allRoundNumbers.length - 1)) * (width - padX * 2)
+  }
+
+  // 全チーム統合スケール
+  const allRankValues = [
+    ...rows.map((r) => r.rank ?? 0),
+    ...overlayRows.flatMap((t) => t.rows.map((r) => r.rank ?? 0)),
+  ].filter((r) => r > 0)
+  const maxRank = Math.max(...allRankValues, 3)
+
+  const allPointValues = [
+    ...rows.map((r) => Number(r.total_points ?? 0)),
+    ...overlayRows.flatMap((t) => t.rows.map((r) => Number(r.total_points ?? 0))),
+  ]
+  const maxPoints = Math.max(...allPointValues, 1)
+  const minPoints = Math.min(...allPointValues)
   const pointRange = Math.max(maxPoints - minPoints, 1)
 
-  const xFor = (index: number) =>
-    rows.length === 1 ? width / 2 : padX + (index / (rows.length - 1)) * (width - padX * 2)
   const rankY = (rank: number) =>
     padY + ((rank - 1) / Math.max(maxRank - 1, 1)) * (height - padY * 2)
   const pointY = (pts: number) =>
     padY + ((maxPoints - pts) / pointRange) * (height - padY * 2)
 
-  const rankCoords = rows.map((row, i) => ({ row, x: xFor(i), y: rankY(row.rank ?? maxRank) }))
-  const pointCoords = rows.map((row, i) => ({ row, x: xFor(i), y: pointY(Number(row.total_points ?? 0)) }))
+  const ranks = rows.map((row) => row.rank ?? 0).filter((r) => r > 0)
+  const rankCoords = rows.map((row) => ({
+    row,
+    x: xForRound(row.mst_event?.round ?? 0),
+    y: rankY(row.rank ?? maxRank),
+  }))
+  const pointCoords = rows.map((row) => ({
+    row,
+    x: xForRound(row.mst_event?.round ?? 0),
+    y: pointY(Number(row.total_points ?? 0)),
+  }))
 
   return (
     <div className="rounded-xl border border-cyan-900/50 bg-slate-800/60 p-4">
@@ -321,7 +367,7 @@ function TeamProgressChart({
         </div>
       </div>
 
-      <div className="mb-2 flex gap-5">
+      <div className="mb-2 flex flex-wrap gap-x-5 gap-y-1 items-center">
         <label className="flex cursor-pointer select-none items-center gap-1.5">
           <input
             type="checkbox"
@@ -340,9 +386,20 @@ function TeamProgressChart({
           />
           <span className="text-[10px] font-semibold text-amber-300">総得点</span>
         </label>
+        {overlayRows.length > 0 && (
+          <>
+            <span className="text-slate-600 text-[10px] select-none">|</span>
+            <span className="text-[10px] text-cyan-400">● {teamName ?? 'おおたか'}</span>
+            {overlayRows.map((t) => (
+              <span key={t.name} className="text-[10px]" style={{ color: t.color }}>
+                ● {t.name}
+              </span>
+            ))}
+          </>
+        )}
       </div>
 
-      <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-44" role="img" aria-label="おおたかの大会推移">
+      <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-44" role="img" aria-label="大会推移グラフ">
         {/* 順位グリッド（左軸） */}
         {showRank && [1, Math.ceil(maxRank / 2), maxRank]
           .filter((v, i, a) => a.indexOf(v) === i)
@@ -356,7 +413,7 @@ function TeamProgressChart({
             )
           })}
 
-        {/* 得点グリッド（両軸なしの場合は左軸、両表示なら右軸ラベルのみ） */}
+        {/* 得点グリッド */}
         {showPoints && [maxPoints, (maxPoints + minPoints) / 2, minPoints]
           .filter((v, i, a) => a.indexOf(v) === i)
           .map((pt) => {
@@ -371,7 +428,38 @@ function TeamProgressChart({
             )
           })}
 
-        {/* 順位ライン */}
+        {/* 比較チームライン（フォーカスチームより手前に描画） */}
+        {overlayRows.map((team) => (
+          <g key={`overlay-${team.name}`}>
+            {showRank && team.rows.length > 1 && (
+              <polyline
+                points={team.rows.map((r) => `${xForRound(r.mst_event?.round ?? 0)},${rankY(r.rank ?? maxRank)}`).join(' ')}
+                fill="none" stroke={team.color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" strokeOpacity="0.75"
+              />
+            )}
+            {showPoints && team.rows.length > 1 && (
+              <polyline
+                points={team.rows.map((r) => `${xForRound(r.mst_event?.round ?? 0)},${pointY(Number(r.total_points ?? 0))}`).join(' ')}
+                fill="none" stroke={team.color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" strokeOpacity="0.6" strokeDasharray="6 3"
+              />
+            )}
+            {team.rows.map((r) => (
+              <g key={`ov-${team.name}-${r.mst_event?.id}`}>
+                <title>{`${team.name} 第${r.mst_event?.round}回：${r.rank ?? '－'}位／${formatPoints(Number(r.total_points ?? 0))}pt`}</title>
+                {showRank && (
+                  <circle cx={xForRound(r.mst_event?.round ?? 0)} cy={rankY(r.rank ?? maxRank)} r={4}
+                    fill={team.color} stroke="#1e293b" strokeWidth="1.5" fillOpacity="0.85" />
+                )}
+                {showPoints && (
+                  <circle cx={xForRound(r.mst_event?.round ?? 0)} cy={pointY(Number(r.total_points ?? 0))} r={4}
+                    fill={team.color} stroke="#1e293b" strokeWidth="1.5" fillOpacity="0.65" />
+                )}
+              </g>
+            ))}
+          </g>
+        ))}
+
+        {/* 順位ライン（フォーカスチーム） */}
         {showRank && rankCoords.length > 1 && (
           <polyline
             points={rankCoords.map(({ x, y }) => `${x},${y}`).join(' ')}
@@ -379,7 +467,7 @@ function TeamProgressChart({
           />
         )}
 
-        {/* 得点ライン */}
+        {/* 得点ライン（フォーカスチーム） */}
         {showPoints && pointCoords.length > 1 && (
           <polyline
             points={pointCoords.map(({ x, y }) => `${x},${y}`).join(' ')}
@@ -387,7 +475,7 @@ function TeamProgressChart({
           />
         )}
 
-        {/* ドット・ラベル・クリック */}
+        {/* ドット・ラベル・クリック（フォーカスチーム） */}
         {rows.map((row, index) => {
           const selected = row.mst_event?.round === selectedRound
           const rc = rankCoords[index]
@@ -395,7 +483,6 @@ function TeamProgressChart({
           const x = rc.x
           const canClick = !!onRoundSelect && row.mst_event != null
           const badgeY = showRank ? rc.y : pc.y
-          // 底辺付近の選択ドットはラベルを上に逃がす（軸ラベルとの重なり防止）
           const rankLabelY = selected
             ? (rc.y + 21 >= height - 16 ? rc.y - 48 : rc.y + 21)
             : (rc.y - 9 <= padY + 2 ? rc.y + 18 : rc.y - 9)
@@ -667,6 +754,7 @@ export default function SearchApp({
   const [teamStandings, setTeamStandings] = useState<TeamStanding[]>([])
   const [teamHistoryStandings, setTeamHistoryStandings] = useState<TeamStanding[]>([])
   const [teamStandingsLoading, setTeamStandingsLoading] = useState(false)
+  const [checkedTeamNames, setCheckedTeamNames] = useState<Set<string>>(new Set())
   const [teamAnalysis, setTeamAnalysis] = useState<TeamAnalysis | null>(null)
 
   // Resizable columns (desktop)
@@ -712,6 +800,14 @@ export default function SearchApp({
     }
     return groups
   }, [uniqueTeams])
+
+  const overlayTeamStandings = useMemo(() => {
+    return [...checkedTeamNames].map((name, i) => ({
+      name: teamDisplayName(name),
+      standings: teamHistoryStandings.filter((s) => s.mst_team.name === name),
+      color: OVERLAY_COLORS[i % OVERLAY_COLORS.length],
+    }))
+  }, [checkedTeamNames, teamHistoryStandings])
 
   const filteredTeamGroups = useMemo(() => {
     if (activeTab !== 'team' || !meetId || teamStandings.length === 0) return teamGroups
@@ -2104,14 +2200,6 @@ export default function SearchApp({
         )}
         {activeTab === 'team' && (
           <div className="max-w-5xl mx-auto">
-            <div className="flex items-start justify-between gap-3 mb-4">
-              <div>
-                <h2 className="text-base font-bold text-white">
-                  {selectedTeam ? `${focusTeamDisplayName} 総合順位` : 'チーム 総合順位'}
-                </h2>
-              </div>
-            </div>
-
             {teamStandingsLoading ? (
               <div className="flex items-center justify-center gap-2 py-16 text-slate-500 text-sm">
                 <span className="w-4 h-4 border-2 border-sky-500 border-t-transparent rounded-full animate-spin" />
@@ -2314,6 +2402,7 @@ export default function SearchApp({
               const rankChange = previousStanding?.rank && currentStanding?.rank
                 ? previousStanding.rank - currentStanding.rank
                 : null
+              const usesCorrectedScoreDisplay = currentMeet?.round === 74 || currentMeet?.round === 76
               const currentTotal = Number(currentStanding?.total_points ?? 0)
               const scoreParts = [
                 ['男子', Number(currentStanding?.male_points ?? 0), 'bg-sky-500'],
@@ -2370,11 +2459,14 @@ export default function SearchApp({
               return (
               <div>
                 {currentStanding && currentMeet && (
-                  <div className="mb-6 space-y-5">
-                    <div className="rounded-xl border border-amber-500/70 bg-gradient-to-r from-amber-950/60 to-yellow-950/30 px-5 py-4 shadow-lg shadow-amber-950/20">
+                  <>
+                    {/* sticky バナー */}
+                    <div className="sticky top-0 z-20 mb-4 rounded-xl border border-amber-500/70 bg-gradient-to-r from-amber-950 to-yellow-950 px-5 py-4 shadow-lg shadow-amber-950/40">
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
                           <div className="text-lg font-bold text-white">
+                            <span className="text-amber-300">{focusTeamDisplayName}</span>
+                            <span className="mx-2 text-amber-700">·</span>
                             第{currentMeet.round}回大会
                             <span className="ml-2 text-amber-300">{currentStanding.rank ?? '－'}位</span>
                             <span className="ml-2 text-sm font-semibold text-white">/ {teamStandings.length}チーム中</span>
@@ -2395,7 +2487,8 @@ export default function SearchApp({
                       </div>
                     </div>
 
-                    <TeamProgressChart standings={historyRows} selectedRound={currentMeet.round} onRoundSelect={(id) => setMeetId(id)} teamName={focusTeamDisplayName} />
+                    <div className="space-y-5">
+                    <TeamProgressChart standings={historyRows} overlayTeams={overlayTeamStandings} selectedRound={currentMeet.round} onRoundSelect={(id) => setMeetId(id)} teamName={focusTeamDisplayName} />
 
                     <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-4">
                       <div className="mb-4 flex items-center justify-between gap-3">
@@ -2421,6 +2514,7 @@ export default function SearchApp({
                       </div>
                     </div>
                   </div>
+                  </>
                 )}
 
                 <div className="flex gap-4 items-start">
@@ -2428,17 +2522,37 @@ export default function SearchApp({
                     <h3 className="mb-3 text-sm font-bold text-white">
                       第{currentMeet?.round}回 全チーム順位
                     </h3>
+                    {usesCorrectedScoreDisplay && (
+                      <div className="mb-3 rounded-xl border border-yellow-500/60 bg-yellow-950/40 px-4 py-3 text-xs leading-relaxed text-yellow-100">
+                        <p className="font-bold text-yellow-300">第{currentMeet?.round}回のPDF公式得点について</p>
+                        <p className="mt-1">
+                          PDF記載値は順位点が二重加算されている可能性が高いため、この表では競技結果から規定どおり再計算した得点を主表示しています。
+                          元のPDF記載値は比較用として隣の列に残しています。順位と男女・混合別得点はPDF記載のままです。
+                        </p>
+                      </div>
+                    )}
                     <div className="overflow-x-auto rounded-xl border border-slate-700">
                     <table className="w-full min-w-[590px] text-sm">
                       <thead>
                         <tr className="bg-gradient-to-r from-sky-950 to-indigo-950 text-slate-300 border-b border-sky-800/40">
+                          <th className="px-2 py-3 text-center text-xs font-semibold w-8">比較</th>
                           <th className="px-3 py-3 text-center text-xs font-semibold w-14">順位</th>
                           <th className="px-3 py-3 text-left text-xs font-semibold">チーム名</th>
-                          <th className="px-3 py-3 text-right text-xs font-semibold">総合</th>
-                          <th className="px-3 py-3 text-right text-xs font-semibold">自主計算</th>
-                          <th className="px-3 py-3 text-right text-xs font-semibold">男子</th>
-                          <th className="px-3 py-3 text-right text-xs font-semibold">女子</th>
-                          <th className="px-3 py-3 text-right text-xs font-semibold">混合</th>
+                          <th className="px-3 py-3 text-right text-xs font-semibold">
+                            {usesCorrectedScoreDisplay ? '補正得点' : '総合'}
+                          </th>
+                          <th className="px-3 py-3 text-right text-xs font-semibold">
+                            {usesCorrectedScoreDisplay ? 'PDF記載' : '自主計算'}
+                          </th>
+                          <th className="px-3 py-3 text-right text-xs font-semibold">
+                            {usesCorrectedScoreDisplay ? '男子(PDF)' : '男子'}
+                          </th>
+                          <th className="px-3 py-3 text-right text-xs font-semibold">
+                            {usesCorrectedScoreDisplay ? '女子(PDF)' : '女子'}
+                          </th>
+                          <th className="px-3 py-3 text-right text-xs font-semibold">
+                            {usesCorrectedScoreDisplay ? '混合(PDF)' : '混合'}
+                          </th>
                         </tr>
                       </thead>
                       <tbody>
@@ -2463,6 +2577,21 @@ export default function SearchApp({
                               }`}
                               onClick={() => { setTeamKey(normalizeOptionName(standing.mst_team.name)); setAthleteId(null) }}
                             >
+                              <td className="px-2 py-2.5 text-center" onClick={(e) => e.stopPropagation()}>
+                                {!isFocus && (
+                                  <input
+                                    type="checkbox"
+                                    checked={checkedTeamNames.has(standing.mst_team.name)}
+                                    onChange={(e) => {
+                                      const next = new Set(checkedTeamNames)
+                                      if (e.target.checked) next.add(standing.mst_team.name)
+                                      else next.delete(standing.mst_team.name)
+                                      setCheckedTeamNames(next)
+                                    }}
+                                    className="h-3.5 w-3.5 accent-sky-400 cursor-pointer"
+                                  />
+                                )}
+                              </td>
                               <td className="px-3 py-2.5 text-center font-semibold">
                                 {standing.rank === 1 ? '🥇' : standing.rank === 2 ? '🥈' : standing.rank === 3 ? '🥉' : standing.rank ?? '－'}
                               </td>
@@ -2470,21 +2599,34 @@ export default function SearchApp({
                                 {teamDisplayName(standing.mst_team.name)}
                                 {isFocus && <span className="ml-2 text-[10px] text-cyan-500">{focusTeamDisplayName}</span>}
                               </td>
-                              <td className="px-3 py-2.5 text-right font-semibold text-sky-400">
-                                {standing.total_points != null ? formatPoints(Number(standing.total_points)) : '－'}
-                              </td>
-                              <td className="px-3 py-2.5 text-right whitespace-nowrap font-mono">
-                                {calculatedPoints == null || pointDifference == null ? (
-                                  <span className="text-slate-500">－</span>
-                                ) : (
-                                  <>
-                                    <span className="text-slate-100">{formatPoints(calculatedPoints)}</span>
-                                    <span className={`ml-1 ${Math.abs(pointDifference) >= 0.005 ? 'font-bold text-yellow-300' : 'text-slate-500'}`}>
-                                      （{formatPointDifference(pointDifference)}）
-                                    </span>
-                                  </>
-                                )}
-                              </td>
+                              {usesCorrectedScoreDisplay ? (
+                                <>
+                                  <td className="px-3 py-2.5 text-right font-semibold text-amber-300">
+                                    {calculatedPoints == null ? '－' : formatPoints(calculatedPoints)}
+                                  </td>
+                                  <td className="px-3 py-2.5 text-right font-mono text-slate-400">
+                                    {standing.total_points != null ? formatPoints(officialPoints) : '－'}
+                                  </td>
+                                </>
+                              ) : (
+                                <>
+                                  <td className="px-3 py-2.5 text-right font-semibold text-sky-400">
+                                    {standing.total_points != null ? formatPoints(officialPoints) : '－'}
+                                  </td>
+                                  <td className="px-3 py-2.5 text-right whitespace-nowrap font-mono">
+                                    {calculatedPoints == null || pointDifference == null ? (
+                                      <span className="text-slate-500">－</span>
+                                    ) : (
+                                      <>
+                                        <span className="text-slate-100">{formatPoints(calculatedPoints)}</span>
+                                        <span className={`ml-1 ${Math.abs(pointDifference) >= 0.005 ? 'font-bold text-yellow-300' : 'text-slate-500'}`}>
+                                          （{formatPointDifference(pointDifference)}）
+                                        </span>
+                                      </>
+                                    )}
+                                  </td>
+                                </>
+                              )}
                               <td className="px-3 py-2.5 text-right text-slate-200">
                                 {standing.male_points != null ? formatPoints(Number(standing.male_points)) : '－'}
                               </td>
