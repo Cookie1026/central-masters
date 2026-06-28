@@ -719,7 +719,7 @@ export default function SearchApp({
   const [results, setResults] = useState<IndividualResult[]>([])
   const [relayResults, setRelayResults] = useState<RelayResult[]>([])
   const [loading, setLoading] = useState(false)
-  const [showMobileSearch, setShowMobileSearch] = useState(false)
+  const [mobileFilterOpen, setMobileFilterOpen] = useState(false)
 
   const [sortField, setSortField] = useState<SortField>('time')
 
@@ -1971,36 +1971,49 @@ export default function SearchApp({
     : null
 
   const tabBar = (
-    <div className="shrink-0 overflow-x-auto bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 border-b border-slate-700/60">
-      <div className="flex min-w-max px-3" role="tablist" aria-label="表示内容">
-        {mainTabs.map((tab) => {
-          const active = activeTab === tab.id
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              disabled={tab.disabled}
-              onClick={() => handleTabChange(tab.id)}
-              className={`relative px-3.5 py-3 text-xs font-semibold transition-colors ${
-                active
-                  ? 'text-sky-300'
-                  : tab.disabled
-                    ? 'text-slate-700 cursor-not-allowed'
-                    : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              {tab.label}
-              {tab.count !== undefined && (
-                <span className={`ml-1.5 text-[10px] ${active ? 'text-sky-500' : 'text-slate-600'}`}>
-                  {tab.count}
-                </span>
-              )}
-              {active && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-sky-400" />}
-            </button>
-          )
-        })}
+    <div className="shrink-0 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 border-b border-slate-700/60 flex items-stretch">
+      {/* Mobile filter button — left of tabs */}
+      <button
+        className="md:hidden shrink-0 px-3 border-r border-slate-700/60 flex items-center text-slate-400 hover:text-slate-200 hover:bg-slate-700/40 transition-colors"
+        onClick={() => setMobileFilterOpen(true)}
+        aria-label="検索フィルターを開く"
+      >
+        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M3 4h18M7 8h10M11 12h2M10 16h4" />
+        </svg>
+      </button>
+      {/* Tabs — horizontally scrollable */}
+      <div className="flex-1 overflow-x-auto">
+        <div className="flex min-w-max px-3" role="tablist" aria-label="表示内容">
+          {mainTabs.map((tab) => {
+            const active = activeTab === tab.id
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                disabled={tab.disabled}
+                onClick={() => handleTabChange(tab.id)}
+                className={`relative px-3.5 py-3 text-xs font-semibold transition-colors ${
+                  active
+                    ? 'text-sky-300'
+                    : tab.disabled
+                      ? 'text-slate-700 cursor-not-allowed'
+                      : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {tab.label}
+                {tab.count !== undefined && (
+                  <span className={`ml-1.5 text-[10px] ${active ? 'text-sky-500' : 'text-slate-600'}`}>
+                    {tab.count}
+                  </span>
+                )}
+                {active && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-sky-400" />}
+              </button>
+            )
+          })}
+        </div>
       </div>
     </div>
   )
@@ -2320,6 +2333,7 @@ export default function SearchApp({
                 standings={teamHistoryStandings}
                 onRoundSelect={(eventId) => setMeetId(eventId)}
                 focusTeamName={focusTeamDisplayName}
+                onTeamSelect={(name) => setTeamKey(normalizeOptionName(name))}
               />
             ) : (() => {
               const historyRows = teamHistoryStandings
@@ -2827,30 +2841,29 @@ export default function SearchApp({
 
       {/* Mobile: stacked */}
       <div className="md:hidden flex flex-col flex-1 overflow-hidden">
-        <button
-          className="flex items-center justify-between px-4 py-3 bg-slate-800 border-b border-slate-700 text-sm font-medium text-slate-300 shrink-0 transition-colors"
-          onClick={() => setShowMobileSearch((v) => !v)}
-          aria-expanded={showMobileSearch}
-        >
-          <span>検索フィルター</span>
-          <svg
-            className={`w-4 h-4 text-slate-500 transition-transform ${showMobileSearch ? 'rotate-180' : ''}`}
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={2}
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-          </svg>
-        </button>
-
-        {showMobileSearch && (
-          <div className="bg-slate-800 border-b border-slate-700 overflow-y-auto shrink-0 max-h-[55vh]">
-            {filterPanel}
-          </div>
-        )}
 
         <div className="flex-1 overflow-hidden min-h-0">{resultsArea}</div>
+      </div>
+
+      {/* Mobile filter drawer — slides in from left */}
+      <div className={`md:hidden fixed inset-0 z-50 transition-all duration-300 ${mobileFilterOpen ? 'visible' : 'invisible pointer-events-none'}`}>
+        <div
+          className={`absolute inset-0 bg-black/60 transition-opacity duration-300 ${mobileFilterOpen ? 'opacity-100' : 'opacity-0'}`}
+          onClick={() => setMobileFilterOpen(false)}
+        />
+        <div className={`absolute left-0 top-0 h-full w-[88vw] max-w-sm bg-slate-800 border-r border-slate-700 flex flex-col transition-transform duration-300 ease-out ${mobileFilterOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+          <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700 shrink-0 bg-slate-900">
+            <span className="text-sm font-bold text-white">検索フィルター</span>
+            <button
+              onClick={() => setMobileFilterOpen(false)}
+              className="flex items-center gap-1 text-xs font-semibold text-sky-400 hover:text-sky-300 transition-colors"
+              aria-label="閉じる"
+            >
+              閉じる ✕
+            </button>
+          </div>
+          <div className="overflow-y-auto flex-1">{filterPanel}</div>
+        </div>
       </div>
 
       {/* Mobile athlete drawer — slides in from right */}

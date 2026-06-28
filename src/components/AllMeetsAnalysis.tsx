@@ -7,6 +7,7 @@ interface Props {
   standings: TeamStanding[]
   onRoundSelect: (eventId: number) => void
   focusTeamName: string
+  onTeamSelect?: (teamName: string) => void
 }
 
 // Same logic as SearchApp.tsx
@@ -29,17 +30,21 @@ function isFocusTeam(name: string, focusTeamName: string): boolean {
   return focusTeamName.includes(name) || name.includes(focusBase)
 }
 
+const RANK_ICONS = ['①', '②', '③']
+
 // ── SVG multi-team rank chart ──────────────────────────────────
 function MultiTeamRankChart({
   teamData,
   rounds,
   focusTeamName,
   onRoundSelect,
+  allRoundEvents,
 }: {
   teamData: { name: string; displayName: string; color: string; rankByRound: Map<number, number> }[]
   rounds: number[]
   focusTeamName: string
   onRoundSelect: (eventId: number) => void
+  allRoundEvents: Map<number, number>
 }) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [svgW, setSvgW] = useState(720)
@@ -50,9 +55,12 @@ function MultiTeamRankChart({
     obs.observe(el)
     return () => obs.disconnect()
   }, [])
-  const px = (n: number) => Math.round((n / svgW) * 720)
+  const px = (n: number) => {
+    const boosted = svgW > 500 ? n * 1.4 : n
+    return Math.round((boosted / svgW) * 720)
+  }
 
-  const W = 720, H = 240, padX = 44, padTop = 24, padBot = 48
+  const W = 720, H = 240, padX = 48, padTop = 24, padBot = 52
   const maxRank = Math.max(...teamData.flatMap((t) => [...t.rankByRound.values()]), 5)
   const xFor = (idx: number) =>
     rounds.length <= 1 ? W / 2 : padX + (idx / (rounds.length - 1)) * (W - padX * 2)
@@ -68,7 +76,7 @@ function MultiTeamRankChart({
         return (
           <g key={r}>
             <line x1={padX} y1={y} x2={W - padX} y2={y} stroke="#334155" strokeWidth="1" strokeDasharray="4 3" />
-            <text x={padX - 6} y={y + 3} textAnchor="end" fill="#64748b" fontSize={px(10)}>{r}位</text>
+            <text x={padX - 6} y={y + 4} textAnchor="end" fill="#64748b" fontSize={px(11)}>{r}位</text>
           </g>
         )
       })}
@@ -100,7 +108,7 @@ function MultiTeamRankChart({
             <g key={`${team.name}-${r}`}>
               <circle cx={x} cy={y} r={focus ? px(5) : px(3)} fill={team.color} strokeWidth={0} />
               {(focus || rank === 1) && (
-                <text x={x} y={y - px(7)} textAnchor="middle" fill={team.color} fontSize={px(10)} fontWeight="700">
+                <text x={x} y={y - px(7)} textAnchor="middle" fill={team.color} fontSize={px(11)} fontWeight="700">
                   {rank}位
                 </text>
               )}
@@ -108,17 +116,36 @@ function MultiTeamRankChart({
           )
         })
       )}
-      {rounds.map((r, i) => (
-        <text key={r} x={xFor(i)} y={H - px(4)} textAnchor="middle" fill="#64748b" fontSize={px(10)}>
-          第{r}回
-        </text>
-      ))}
+      {/* Round labels — clickable */}
+      {rounds.map((r, i) => {
+        const eid = allRoundEvents.get(r)
+        return (
+          <g
+            key={r}
+            onClick={eid ? () => onRoundSelect(eid) : undefined}
+            style={{ cursor: eid ? 'pointer' : 'default' }}
+          >
+            <rect x={xFor(i) - 22} y={H - padBot + 6} width={44} height={18} fill="transparent" />
+            <text
+              x={xFor(i)}
+              y={H - padBot + 18}
+              textAnchor="middle"
+              fill={eid ? '#93c5fd' : '#64748b'}
+              fontSize={px(11)}
+              fontWeight={eid ? '600' : '400'}
+              textDecoration={eid ? 'underline' : 'none'}
+            >
+              第{r}回
+            </text>
+          </g>
+        )
+      })}
     </svg>
   )
 }
 
 // ── Main component ─────────────────────────────────────────────
-export default function AllMeetsAnalysis({ standings, onRoundSelect, focusTeamName }: Props) {
+export default function AllMeetsAnalysis({ standings, onRoundSelect, focusTeamName, onTeamSelect }: Props) {
   const [activeView, setActiveView] = useState<'table' | 'analysis'>('table')
 
   const { teamMap, rounds, allRoundEvents } = useMemo(() => {
@@ -189,10 +216,19 @@ export default function AllMeetsAnalysis({ standings, onRoundSelect, focusTeamNa
 
   return (
     <div className="max-w-5xl mx-auto pb-8">
-      {/* ── Sticky title banner ── */}
-      <div className="sticky top-0 z-10 rounded-xl border border-sky-800/50 bg-gradient-to-r from-sky-950/95 to-indigo-950/95 backdrop-blur px-5 py-3 mb-6">
-        <h2 className="text-sm font-bold text-white">{focusDisplay}　全大会分析</h2>
-        <p className="text-[10px] text-slate-400 mt-0.5">第{rounds[0]}回〜第{latestRound}回（全{rounds.length}大会）／3大会以上参加チーム対象</p>
+      {/* ── Glowing sticky title banner ── */}
+      <div className="sticky top-0 z-10 mb-6">
+        <div className="relative rounded-xl overflow-hidden border border-amber-500/50 shadow-xl shadow-amber-500/15">
+          {/* animated shimmer */}
+          <div className="absolute inset-0 bg-gradient-to-r from-slate-900 via-amber-950/60 to-slate-900" />
+          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_50%_50%,rgba(251,191,36,0.12),transparent_70%)] animate-pulse" />
+          <div className="relative px-5 py-4 flex items-center gap-3">
+            <span className="text-2xl leading-none">🏊</span>
+            <h2 className="text-base font-black tracking-wide bg-gradient-to-r from-amber-200 via-white to-amber-200 bg-clip-text text-transparent">
+              {focusDisplay}　全大会分析
+            </h2>
+          </div>
+        </div>
       </div>
 
       {/* ── Tab switcher ── */}
@@ -221,10 +257,11 @@ export default function AllMeetsAnalysis({ standings, onRoundSelect, focusTeamNa
             <span className="text-[10px] text-slate-500 ml-2">（3大会以上参加チーム）</span>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full text-xs" style={{ minWidth: `${200 + rounds.length * 64}px` }}>
+            <table className="w-full text-xs" style={{ minWidth: `${240 + rounds.length * 64}px` }}>
               <thead>
                 <tr className="bg-slate-900/50 border-b border-slate-700">
-                  <th className="px-3 py-2 text-left text-slate-400 font-medium sticky left-0 bg-slate-900/80">チーム</th>
+                  <th className="px-2 py-2 text-center text-slate-500 font-medium sticky left-0 bg-slate-900/80 w-8">#</th>
+                  <th className="px-3 py-2 text-left text-slate-400 font-medium sticky left-8 bg-slate-900/80">チーム</th>
                   <th className="px-2 py-2 text-center text-slate-400 font-medium">avg</th>
                   {reversedRounds.map((r) => (
                     <th key={r} className="px-2 py-2 text-center text-slate-400 font-medium whitespace-nowrap">
@@ -236,13 +273,32 @@ export default function AllMeetsAnalysis({ standings, onRoundSelect, focusTeamNa
               <tbody>
                 {teamStats.map((t, rowIdx) => {
                   const focus = isFocusTeam(t.name, focusTeamName)
+                  const rankIcon = rowIdx < 3 ? RANK_ICONS[rowIdx] : null
                   return (
                     <tr
                       key={t.name}
                       className={`border-t border-slate-700/40 ${focus ? 'bg-amber-950/30' : rowIdx % 2 === 0 ? 'bg-slate-800/40' : ''}`}
                     >
-                      <td className={`px-3 py-2 font-medium sticky left-0 ${focus ? 'text-amber-300 bg-amber-950/60 ring-1 ring-inset ring-amber-600/40' : 'text-slate-200 bg-slate-900/70'} whitespace-nowrap`}>
-                        {t.displayName}
+                      <td className={`px-2 py-2 text-center font-bold sticky left-0 ${focus ? 'bg-amber-950/60 text-amber-400' : 'bg-slate-900/70 text-slate-600'}`}>
+                        {rankIcon ? (
+                          <span className={`text-sm ${rowIdx === 0 ? 'text-amber-400' : rowIdx === 1 ? 'text-slate-300' : 'text-amber-700'}`}>
+                            {rankIcon}
+                          </span>
+                        ) : (
+                          <span className="text-slate-600">{rowIdx + 1}</span>
+                        )}
+                      </td>
+                      <td className={`px-3 py-2 font-medium sticky left-8 ${focus ? 'text-amber-300 bg-amber-950/60 ring-1 ring-inset ring-amber-600/40' : 'text-slate-200 bg-slate-900/70'} whitespace-nowrap`}>
+                        {onTeamSelect ? (
+                          <button
+                            className="hover:text-sky-300 hover:underline transition-colors text-left"
+                            onClick={() => onTeamSelect(t.name)}
+                          >
+                            {t.displayName}
+                          </button>
+                        ) : (
+                          t.displayName
+                        )}
                         {focus && <span className="ml-1.5 text-[9px] text-amber-500">◀</span>}
                       </td>
                       <td className={`px-2 py-2 text-center font-mono font-bold ${focus ? 'text-amber-300' : 'text-slate-300'}`}>
@@ -289,7 +345,6 @@ export default function AllMeetsAnalysis({ standings, onRoundSelect, focusTeamNa
               チーム分析レポート
             </h3>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {/* 最強チーム */}
               <InsightCard
                 emoji="👑"
                 title="最強チームは？"
@@ -303,8 +358,6 @@ export default function AllMeetsAnalysis({ standings, onRoundSelect, focusTeamNa
                     : 'データなし'
                 }
               />
-
-              {/* 選択チームの推移 */}
               <InsightCard
                 emoji="📈"
                 title={`${focusDisplay}の推移`}
@@ -319,8 +372,6 @@ export default function AllMeetsAnalysis({ standings, onRoundSelect, focusTeamNa
                     : 'データなし'
                 }
               />
-
-              {/* 1位との差 */}
               <InsightCard
                 emoji="🏆"
                 title="1位との差は？"
@@ -333,8 +384,6 @@ export default function AllMeetsAnalysis({ standings, onRoundSelect, focusTeamNa
                     : '最新大会のデータなし'
                 }
               />
-
-              {/* 最も躍進したチーム */}
               <InsightCard
                 emoji="🚀"
                 title="最も躍進したチーム"
@@ -345,8 +394,6 @@ export default function AllMeetsAnalysis({ standings, onRoundSelect, focusTeamNa
                     : `大きな順位変動はなく、上位は安定した顔ぶれです。`
                 }
               />
-
-              {/* 最も安定したチーム */}
               <InsightCard
                 emoji="🛡️"
                 title="最も安定したチーム"
@@ -357,8 +404,6 @@ export default function AllMeetsAnalysis({ standings, onRoundSelect, focusTeamNa
                     : 'データなし'
                 }
               />
-
-              {/* 得点向上ヒント */}
               <InsightCard
                 emoji="💡"
                 title={`${focusDisplay}が伸びるには`}
@@ -374,7 +419,7 @@ export default function AllMeetsAnalysis({ standings, onRoundSelect, focusTeamNa
               <span className="w-1 h-4 rounded bg-amber-400 shrink-0" />
               <h3 className="text-sm font-bold text-white">チーム別 大会順位推移（上位{chartTeams.length}チーム）</h3>
             </div>
-            <p className="text-[10px] text-slate-500 mb-3">グラフ上側ほど上位。{focusDisplay}は黄色。</p>
+            <p className="text-[10px] text-slate-500 mb-3">{focusDisplay}は黄色。第〇回をクリックすると大会データへ移動。</p>
             <div className="flex flex-wrap gap-x-4 gap-y-1 mb-4">
               {chartTeams.map((t) => (
                 <span key={t.name} className="text-[10px] flex items-center gap-1">
@@ -388,6 +433,7 @@ export default function AllMeetsAnalysis({ standings, onRoundSelect, focusTeamNa
               rounds={rounds}
               focusTeamName={focusTeamName}
               onRoundSelect={onRoundSelect}
+              allRoundEvents={allRoundEvents}
             />
           </div>
         </div>
