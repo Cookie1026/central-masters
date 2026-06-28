@@ -278,6 +278,7 @@ function TeamProgressChart({
 }) {
   const [showRank, setShowRank] = useState(true)
   const [showPoints, setShowPoints] = useState(false)
+  const [hiddenTeams, setHiddenTeams] = useState<Set<string>>(new Set())
 
   // SVG実描画幅を計測してフォントサイズをCSSピクセル単位で指定できるようにする
   const svgRef = useRef<SVGSVGElement>(null)
@@ -414,11 +415,25 @@ function TeamProgressChart({
           <>
             <span className="text-slate-600 text-[10px] select-none">|</span>
             <span className="text-[10px] text-cyan-400">● {teamName ?? 'おおたか'}</span>
-            {overlayRows.map((t) => (
-              <span key={t.name} className="text-[10px]" style={{ color: t.color }}>
-                ● {t.name}
-              </span>
-            ))}
+            {overlayRows.map((t) => {
+              const hidden = hiddenTeams.has(t.name)
+              return (
+                <button
+                  key={t.name}
+                  className={`text-[10px] transition-opacity cursor-pointer select-none ${hidden ? 'opacity-30 line-through' : 'opacity-100'}`}
+                  style={{ color: t.color }}
+                  onClick={() => setHiddenTeams((prev) => {
+                    const next = new Set(prev)
+                    if (next.has(t.name)) next.delete(t.name)
+                    else next.add(t.name)
+                    return next
+                  })}
+                  title={hidden ? `${t.name}を表示` : `${t.name}を非表示`}
+                >
+                  ● {t.name}
+                </button>
+              )
+            })}
           </>
         )}
       </div>
@@ -453,7 +468,7 @@ function TeamProgressChart({
           })}
 
         {/* 比較チームライン（フォーカスチームより手前に描画） */}
-        {overlayRows.map((team) => (
+        {overlayRows.filter((team) => !hiddenTeams.has(team.name)).map((team) => (
           <g key={`overlay-${team.name}`}>
             {showRank && team.rows.length > 1 && (
               <polyline

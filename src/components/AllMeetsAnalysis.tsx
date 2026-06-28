@@ -186,7 +186,7 @@ export default function AllMeetsAnalysis({ standings, onRoundSelect, focusTeamNa
       const participated = ranks.length
       return { name, ...data, avgRank, bestRank, totalPoints, latestPoints, firstRank, lastRank, rankImprovement, participated }
     })
-    return stats.filter((t) => t.participated >= 3).sort((a, b) => a.avgRank - b.avgRank)
+    return stats.sort((a, b) => a.avgRank - b.avgRank)
   }, [teamMap, rounds])
 
   const latestRound = rounds[rounds.length - 1]
@@ -254,7 +254,6 @@ export default function AllMeetsAnalysis({ standings, onRoundSelect, focusTeamNa
           <div className="flex items-center gap-2 px-4 py-3 bg-gradient-to-r from-sky-950/80 to-indigo-950/80">
             <span className="w-1 h-4 rounded bg-amber-400 shrink-0" />
             <h3 className="text-sm font-bold text-sky-100">全チーム順位推移表</h3>
-            <span className="text-[10px] text-slate-500 ml-2">（3大会以上参加チーム）</span>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-xs" style={{ minWidth: `${240 + rounds.length * 64}px` }}>
