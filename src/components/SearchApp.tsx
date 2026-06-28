@@ -290,7 +290,11 @@ function TeamProgressChart({
     return () => observer.disconnect()
   }, [])
   // SVG座標系でのフォントサイズ計算（cssPixels → SVG units）
-  const px = (cssPixels: number) => Math.round((cssPixels / svgRenderedWidth) * 720)
+  // PC（幅500px超）はテキストを1.4倍にして読みやすくする。モバイルは等倍。
+  const px = (cssPixels: number) => {
+    const boosted = svgRenderedWidth > 500 ? cssPixels * 1.4 : cssPixels
+    return Math.round((boosted / svgRenderedWidth) * 720)
+  }
 
   const rows = standings
     .filter((standing) => standing.mst_event)
@@ -1961,7 +1965,7 @@ export default function SearchApp({
     : null
 
   const tabBar = (
-    <div className="shrink-0 overflow-x-auto border-b border-slate-700/80 bg-slate-900/95">
+    <div className="shrink-0 overflow-x-auto bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 border-b border-slate-700/60">
       <div className="flex min-w-max px-3" role="tablist" aria-label="表示内容">
         {mainTabs.map((tab) => {
           const active = activeTab === tab.id
@@ -2209,7 +2213,6 @@ export default function SearchApp({
   const resultsArea = (
     <div className="h-full overflow-y-auto flex flex-col">
       {tournamentTitle}
-      {tabBar}
       <div className="p-4 flex-1">
         {loading && activeTab === 'results' && (
           <div className="flex items-center justify-center gap-2 py-12 text-slate-500 text-sm">
@@ -2544,31 +2547,31 @@ export default function SearchApp({
                 {currentStanding && currentMeet && (
                   <>
                     {/* sticky バナー */}
-                    <div className="sticky top-0 z-20 mb-4 rounded-xl border border-amber-500/70 bg-gradient-to-r from-amber-950 to-yellow-950 px-5 py-4 shadow-lg shadow-amber-950/40">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <div className="text-lg font-bold text-white">
-                            <span className="text-amber-300">{focusTeamDisplayName}</span>
-                            <span className="mx-2 text-amber-700">·</span>
-                            第{currentMeet.round}回大会
-                            <span className="ml-2 text-amber-300">{currentStanding.rank ?? '－'}位</span>
-                            <span className="ml-2 text-sm font-semibold text-white">/ {teamStandings.length}チーム中</span>
-                          </div>
-                        </div>
-                        <div className="rounded-full border border-amber-400/50 bg-amber-400/10 px-4 py-2 text-sm font-bold text-amber-300">
-                          {rankChange == null
-                            ? '前回比較なし'
-                            : rankChange > 0
-                              ? `前回から ${rankChange}ランクアップ ↑`
-                              : rankChange < 0
-                                ? `前回から ${Math.abs(rankChange)}ランクダウン ↓`
-                                : '前回と同順位 →'}
+                    <div className="sticky top-0 z-20 mb-4 rounded-xl border border-amber-500/70 bg-gradient-to-r from-amber-950 to-yellow-950 px-3 py-2 sm:px-5 sm:py-4 shadow-lg shadow-amber-950/40">
+                      <div className="flex items-center gap-2">
+                        <div className="text-sm sm:text-lg font-bold text-white leading-snug">
+                          <span className="text-amber-300">{focusTeamDisplayName}</span>
+                          <span className="mx-1.5 sm:mx-2 text-amber-700">·</span>
+                          第{currentMeet.round}回大会
+                          <span className="ml-1.5 sm:ml-2 text-amber-300">{currentStanding.rank ?? '－'}位</span>
+                          <span className="ml-1 sm:ml-2 text-xs sm:text-sm font-semibold text-white">/ {teamStandings.length}チーム中</span>
                         </div>
                       </div>
                     </div>
 
                     <div className="space-y-5">
+                    <div>
                     <TeamProgressChart standings={historyRows} overlayTeams={overlayTeamStandings} selectedRound={currentMeet.round} onRoundSelect={(id) => setMeetId(id)} teamName={focusTeamDisplayName} />
+                    {rankChange != null && (
+                      <p className={`mt-1 text-right text-[11px] font-semibold ${rankChange > 0 ? 'text-emerald-400' : rankChange < 0 ? 'text-rose-400' : 'text-slate-400'}`}>
+                        {rankChange > 0
+                          ? `↑ 前回から ${rankChange}ランクアップ`
+                          : rankChange < 0
+                            ? `↓ 前回から ${Math.abs(rankChange)}ランクダウン`
+                            : '→ 前回と同順位'}
+                      </p>
+                    )}
+                    </div>
 
                     <div className="rounded-xl border border-slate-700 bg-slate-800/60 overflow-hidden">
                       <button
@@ -2809,9 +2812,12 @@ export default function SearchApp({
 
   // ── Layout ────────────────────────────────────────────────────
   return (
-    <>
+    <div className="flex flex-col h-full overflow-hidden">
+      {/* Full-width tab bar — visually extends the site header */}
+      {tabBar}
+
       {/* Desktop: 3-column resizable */}
-      <div className="hidden md:flex h-full overflow-hidden">
+      <div className="hidden md:flex flex-1 overflow-hidden">
         <div
           className="shrink-0 bg-slate-800 border-r border-slate-700 overflow-y-auto flex flex-col"
           style={{ width: leftW }}
@@ -2976,7 +2982,7 @@ export default function SearchApp({
       </div>
 
       {/* Mobile: stacked */}
-      <div className="md:hidden flex flex-col h-full overflow-hidden">
+      <div className="md:hidden flex flex-col flex-1 overflow-hidden">
         <button
           className="flex items-center justify-between px-4 py-3 bg-slate-800 border-b border-slate-700 text-sm font-medium text-slate-300 shrink-0 transition-colors"
           onClick={() => setShowMobileSearch((v) => !v)}
@@ -3002,6 +3008,6 @@ export default function SearchApp({
 
         <div className="flex-1 overflow-hidden min-h-0">{resultsArea}</div>
       </div>
-    </>
+    </div>
   )
 }
