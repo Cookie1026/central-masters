@@ -276,6 +276,21 @@ function TeamProgressChart({
   const [showRank, setShowRank] = useState(true)
   const [showPoints, setShowPoints] = useState(false)
 
+  // SVG実描画幅を計測してフォントサイズをCSSピクセル単位で指定できるようにする
+  const svgRef = useRef<SVGSVGElement>(null)
+  const [svgRenderedWidth, setSvgRenderedWidth] = useState(720)
+  useEffect(() => {
+    const el = svgRef.current
+    if (!el) return
+    const observer = new ResizeObserver((entries) => {
+      setSvgRenderedWidth(entries[0].contentRect.width || 720)
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+  // SVG座標系でのフォントサイズ計算（cssPixels → SVG units）
+  const px = (cssPixels: number) => Math.round((cssPixels / svgRenderedWidth) * 720)
+
   const rows = standings
     .filter((standing) => standing.mst_event)
     .sort((a, b) => (a.mst_event?.round ?? 0) - (b.mst_event?.round ?? 0))
@@ -399,7 +414,7 @@ function TeamProgressChart({
         )}
       </div>
 
-      <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-44" role="img" aria-label="大会推移グラフ">
+      <svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} className="w-full h-44" role="img" aria-label="大会推移グラフ">
         {/* 順位グリッド（左軸） */}
         {showRank && [1, Math.ceil(maxRank / 2), maxRank]
           .filter((v, i, a) => a.indexOf(v) === i)
@@ -408,7 +423,7 @@ function TeamProgressChart({
             return (
               <g key={`rg-${rank}`}>
                 <line x1={padX} y1={y} x2={width - padX} y2={y} stroke="#334155" strokeWidth="1" strokeDasharray="4 4" />
-                <text x={padX - 8} y={y + 3} textAnchor="end" fill="#64748b" fontSize="10">{rank}位</text>
+                <text x={padX - 8} y={y + 3} textAnchor="end" fill="#64748b" fontSize={px(10)}>{rank}位</text>
               </g>
             )
           })}
@@ -419,11 +434,11 @@ function TeamProgressChart({
           .map((pt) => {
             const y = pointY(pt)
             return showRank ? (
-              <text key={`pr-${pt}`} x={width - padX + 4} y={y + 3} textAnchor="start" fill="#78350f" fontSize="10">{formatPoints(pt)}pt</text>
+              <text key={`pr-${pt}`} x={width - padX + 4} y={y + 3} textAnchor="start" fill="#78350f" fontSize={px(10)}>{formatPoints(pt)}pt</text>
             ) : (
               <g key={`pg-${pt}`}>
                 <line x1={padX} y1={y} x2={width - padX} y2={y} stroke="#334155" strokeWidth="1" strokeDasharray="4 4" />
-                <text x={padX - 8} y={y + 3} textAnchor="end" fill="#64748b" fontSize="10">{formatPoints(pt)}pt</text>
+                <text x={padX - 8} y={y + 3} textAnchor="end" fill="#64748b" fontSize={px(10)}>{formatPoints(pt)}pt</text>
               </g>
             )
           })}
@@ -483,12 +498,14 @@ function TeamProgressChart({
           const x = rc.x
           const canClick = !!onRoundSelect && row.mst_event != null
           const badgeY = showRank ? rc.y : pc.y
+          const lblOff = px(14)   // ラベルとドットの距離（CSSピクセル換算で常に14px）
+          const lblOffSel = px(22)
           const rankLabelY = selected
-            ? (rc.y + 21 >= height - 16 ? rc.y - 48 : rc.y + 21)
-            : (rc.y - 9 <= padY + 2 ? rc.y + 18 : rc.y - 9)
+            ? (rc.y + lblOffSel >= height - px(16) ? rc.y - px(48) : rc.y + lblOffSel)
+            : (rc.y - lblOff <= padY + 2 ? rc.y + lblOff : rc.y - lblOff)
           const ptsLabelY = selected
-            ? (pc.y + 21 >= height - 16 ? pc.y - 48 : pc.y + 21)
-            : (pc.y - 9 <= padY + 2 ? pc.y + 18 : pc.y - 9)
+            ? (pc.y + lblOffSel >= height - px(16) ? pc.y - px(48) : pc.y + lblOffSel)
+            : (pc.y - lblOff <= padY + 2 ? pc.y + lblOff : pc.y - lblOff)
 
           return (
             <g
@@ -500,21 +517,21 @@ function TeamProgressChart({
 
               {selected && (showRank || showPoints) && (
                 <>
-                  <circle cx={x} cy={badgeY} r="11" fill="#f59e0b" fillOpacity="0.2" />
-                  <rect x={x - 18} y={badgeY - 33} width="36" height="14" rx="7" fill="#f59e0b" />
-                  <text x={x} y={badgeY - 23} textAnchor="middle" fill="#451a03" fontSize="9" fontWeight="700">今回</text>
+                  <circle cx={x} cy={badgeY} r={px(11)} fill="#f59e0b" fillOpacity="0.2" />
+                  <rect x={x - px(18)} y={badgeY - px(33)} width={px(36)} height={px(14)} rx={px(7)} fill="#f59e0b" />
+                  <text x={x} y={badgeY - px(23)} textAnchor="middle" fill="#451a03" fontSize={px(9)} fontWeight="700">今回</text>
                 </>
               )}
 
               {showRank && (
                 <>
-                  <circle cx={x} cy={rc.y} r={selected ? 7 : 5}
+                  <circle cx={x} cy={rc.y} r={selected ? px(7) : px(5)}
                     fill={selected ? '#fbbf24' : '#22d3ee'}
                     stroke={selected ? '#fef3c7' : '#083344'}
                     strokeWidth={selected ? 3 : 2}
                   />
                   <text x={x} y={rankLabelY} textAnchor="middle"
-                    fill={selected ? '#fbbf24' : '#a5f3fc'} fontSize="12" fontWeight={selected ? '700' : '400'}>
+                    fill={selected ? '#fbbf24' : '#a5f3fc'} fontSize={px(12)} fontWeight={selected ? '700' : '400'}>
                     {row.rank ?? '－'}位
                   </text>
                 </>
@@ -522,25 +539,25 @@ function TeamProgressChart({
 
               {showPoints && (
                 <>
-                  <circle cx={x} cy={pc.y} r={selected ? 7 : 5}
+                  <circle cx={x} cy={pc.y} r={selected ? px(7) : px(5)}
                     fill={selected ? '#fbbf24' : '#f59e0b'}
                     stroke={selected ? '#fef3c7' : '#451a03'}
                     strokeWidth={selected ? 3 : 2}
                   />
                   <text x={x} y={ptsLabelY} textAnchor="middle"
-                    fill={selected ? '#fbbf24' : '#fcd34d'} fontSize="12" fontWeight={selected ? '700' : '400'}>
+                    fill={selected ? '#fbbf24' : '#fcd34d'} fontSize={px(12)} fontWeight={selected ? '700' : '400'}>
                     {formatPoints(Number(row.total_points ?? 0))}pt
                   </text>
                 </>
               )}
 
-              <text x={x} y={height - 3} textAnchor="middle"
+              <text x={x} y={height - px(3)} textAnchor="middle"
                 fill={selected ? '#fbbf24' : canClick ? '#94a3b8' : '#64748b'}
-                fontSize="10" fontWeight={selected ? '700' : '400'}>
+                fontSize={px(10)} fontWeight={selected ? '700' : '400'}>
                 第{row.mst_event?.round}回
               </text>
               {canClick && (
-                <rect x={x - 22} y={height - 15} width="44" height="14" fill="transparent" />
+                <rect x={x - px(22)} y={height - px(15)} width={px(44)} height={px(14)} fill="transparent" />
               )}
             </g>
           )
