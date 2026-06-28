@@ -2471,9 +2471,6 @@ export default function SearchApp({
                             <span className="ml-2 text-amber-300">{currentStanding.rank ?? '－'}位</span>
                             <span className="ml-2 text-sm font-semibold text-white">/ {teamStandings.length}チーム中</span>
                           </div>
-                          <p className="mt-1 text-xs text-slate-200">
-                            {currentMeet.date ?? '開催日未登録'} ・ {currentMeet.venue ?? '会場未登録'} ・ {currentMeet.pool_type}
-                          </p>
                         </div>
                         <div className="rounded-full border border-amber-400/50 bg-amber-400/10 px-4 py-2 text-sm font-bold text-amber-300">
                           {rankChange == null
@@ -2493,7 +2490,7 @@ export default function SearchApp({
                     <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-4">
                       <div className="mb-4 flex items-center justify-between gap-3">
                         <div>
-                          <h3 className="text-sm font-bold text-white">第{currentMeet.round}回 得点構成</h3>
+                          <h3 className="text-sm font-bold text-white">{focusTeamDisplayName}　第{currentMeet.round}回 得点構成</h3>
                           <p className="mt-0.5 text-[10px] text-slate-300">今回の{focusTeamDisplayName}の男女・混合別得点</p>
                         </div>
                         <span className="font-mono text-sm font-bold text-amber-300">{formatPoints(currentTotal)}pt</span>
