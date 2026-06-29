@@ -94,6 +94,63 @@ function normalizeOptionName(name: string): string {
   return teamDisplayName(name).replace(/\s+/g, '')
 }
 
+function normalizeRelayMeetRecordTeamName(name: string): string {
+  return name.replace(/^Ｓ/, 'S').replace(/^ＣＳ/, 'CS')
+}
+
+function parseRelayMeetRecord(raw: string): { members: string; team: string } | null {
+  const sep = '・'
+  const parts = raw
+    .trim()
+    .split(/ +/)
+    .filter(Boolean)
+    .filter((part) => part !== '-' && !/^\d+$/.test(part))
+  const hasSep = (value: string) => value.includes(sep)
+  const compact = (value: string) => value.replace(/[ \u3000]+/g, '')
+  const mergeMembers = (chunks: string[]) =>
+    chunks
+      .join(sep)
+      .replace(/・+/g, sep)
+      .replace(/^・|・$/g, '')
+      .replace(/[ \u3000]+/g, '')
+
+  for (let idx = 1; idx < parts.length - 1; idx++) {
+    const teamToken = compact(parts[idx])
+    if (!teamToken || hasSep(teamToken)) continue
+    const leftRaw = parts.slice(0, idx).join('')
+    const rightRaw = parts.slice(idx + 1).join('')
+    if (hasSep(leftRaw) && hasSep(rightRaw)) {
+      return {
+        team: normalizeRelayMeetRecordTeamName(teamToken),
+        members: mergeMembers([leftRaw, rightRaw]),
+      }
+    }
+  }
+
+  if (parts.length >= 3 && !hasSep(parts[0])) {
+    const memberTokens = parts.slice(1).filter(hasSep)
+    const members = mergeMembers(memberTokens)
+    if (members.split(sep).length >= 4) {
+      return {
+        team: normalizeRelayMeetRecordTeamName(compact(parts[0])),
+        members,
+      }
+    }
+  }
+
+  return null
+}
+
+function meetRecordRelayMembers(record: MeetRecord): string {
+  if (record.athlete_name?.trim()) return record.athlete_name
+  return parseRelayMeetRecord(record.name_team_raw)?.members ?? record.name_team_raw.replace(/[ \u3000]+/g, '')
+}
+
+function meetRecordRelayTeam(record: MeetRecord): string {
+  if (record.team_name?.trim()) return normalizeRelayMeetRecordTeamName(record.team_name)
+  return parseRelayMeetRecord(record.name_team_raw)?.team ?? ''
+}
+
 function formatPoints(points: number): string {
   return points.toFixed(2)
 }
@@ -3590,9 +3647,11 @@ export default function SearchApp({
                             </thead>
                             <tbody>
                               {sorted.map((r, i) => {
+                                const relayTeam = r.is_relay ? meetRecordRelayTeam(r) : ''
                                 const isTeamHit = !!mrHighlightTeam && (
                                   r.team_name === mrHighlightTeam ||
-                                  (!r.team_name && r.name_team_raw.includes(mrHighlightTeam))
+                                  relayTeam === mrHighlightTeam ||
+                                  (!r.team_name && !relayTeam && r.name_team_raw.includes(mrHighlightTeam))
                                 )
                                 const isNameHit = !!mrHighlightName && r.athlete_name === mrHighlightName
                                 const isHighlighted = isTeamHit || isNameHit
@@ -3620,7 +3679,7 @@ export default function SearchApp({
                                     </td>
                                     <td className="px-3 py-2">
                                       {r.is_relay ? (
-                                        <span className="text-xs text-slate-300">{r.name_team_raw}</span>
+                                        <span className="text-xs text-slate-300">{meetRecordRelayMembers(r)}</span>
                                       ) : (
                                         <button
                                           type="button"
@@ -3634,7 +3693,7 @@ export default function SearchApp({
                                       )}
                                     </td>
                                     <td className="px-3 py-2 text-xs text-slate-400">
-                                      {r.is_relay ? '' : r.team_name}
+                                      {r.is_relay ? relayTeam : r.team_name}
                                     </td>
                                     <td className="px-3 py-2 text-right font-mono font-bold text-amber-300 whitespace-nowrap">
                                       {r.record}
