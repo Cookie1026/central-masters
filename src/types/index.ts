@@ -37,6 +37,7 @@ export interface AthleteOption {
 
 export interface RelayMember {
   swim_order: number
+  stroke?: string | null
   split_seconds: number | null
   dive_time: number | null
   player_id: number
@@ -114,6 +115,21 @@ export interface AthleteHistoryMeet {
   date: string | null
   individual: AthleteHistoryIndividual[]
   relay: AthleteHistoryRelay[]
+}
+
+export interface MeetRecord {
+  id: number
+  course: string
+  gender: string
+  event: string
+  distance: string
+  age_group: number
+  is_relay: boolean
+  name_team_raw: string
+  athlete_name: string | null
+  team_name: string | null
+  record: string
+  established_date: string | null
 }
 
 export interface TeamStanding {
