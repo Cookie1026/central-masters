@@ -310,10 +310,21 @@ class ResultsParser:
         """'1 佐藤由利子   セ・用賀' -> (1, '佐藤由利子', 'セ・用賀')"""
         text = text.strip()
         rank = None
-        rm = re.match(r'^(\d+)\s+(.*)', text)
+        # PDF text occasionally glues the rank directly to the athlete name
+        # (e.g. "1友田  智哲").  Accept that form while still limiting the
+        # prefix to a one- or two-digit rank.
+        rm = re.match(r'^(\d{1,2})(?:\s+|(?=[^\d\s]))(.*)', text)
         if rm:
             rank = int(rm.group(1))
             text = rm.group(2).strip()
+        # Some extracted lines also lose the whitespace before a Central team
+        # name.  Split at the embedded team marker before falling back to the
+        # ordinary whitespace-based split.
+        team_marker = re.search(r'セ[・･]', text)
+        if team_marker and team_marker.start() > 0:
+            name = re.sub(r'\s+', '', text[:team_marker.start()].strip())
+            team = text[team_marker.start():].strip()
+            return rank, name, team
         # チーム名は必ず最後のトークン。rsplit で右から1回分割する
         # （名前内スペースが2〜6個、名前→チーム間が1〜10個と幅があるため
         #   固定スペース数での split は使えない）

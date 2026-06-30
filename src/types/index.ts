@@ -98,6 +98,8 @@ export interface AthleteHistoryIndividual {
   rank: number | null
   points: number | null
   is_meet_record: boolean
+  disqualification_code: string | null
+  is_withdrawal: boolean
 }
 
 export interface AthleteHistoryRelay {
@@ -107,6 +109,8 @@ export interface AthleteHistoryRelay {
   rank: number | null
   team_points: number | null
   is_meet_record: boolean
+  disqualification_code: string | null
+  is_withdrawal: boolean
 }
 
 export interface AthleteHistoryMeet {

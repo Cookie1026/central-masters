@@ -44,23 +44,44 @@ export async function GET(request: Request) {
 
   // エイリアス（OCR誤読名）は一覧に表示しない
   const aliasNames = new Set((aliasData ?? []).map((a: { alias: string }) => a.alias))
-  const filteredAthletes = aliasNames.size > 0
+  let filteredAthletes = aliasNames.size > 0
     ? athletes.filter((a) => !aliasNames.has(a.name))
     : athletes
 
   if (eventId) {
+    const eventIdNumber = parseInt(eventId)
+    const teamAthleteIds = filteredAthletes.map((a) => a.id)
+    const [{ data: individualEntries }, { data: relayEntries }] = await Promise.all([
+      supabaseServer
+        .from('dt_result_person')
+        .select('player_id')
+        .eq('event_id', eventIdNumber)
+        .in('player_id', teamAthleteIds),
+      supabaseServer
+        .from('dt_player_relay')
+        .select('player_id, dt_result_relay!inner(event_id)')
+        .eq('dt_result_relay.event_id', eventIdNumber)
+        .in('player_id', teamAthleteIds),
+    ])
+    const participatingIds = new Set([
+      ...(individualEntries ?? []).map((row) => row.player_id),
+      ...(relayEntries ?? []).map((row) => row.player_id),
+    ])
+    filteredAthletes = filteredAthletes.filter((athlete) => participatingIds.has(athlete.id))
+    if (filteredAthletes.length === 0) return NextResponse.json([])
+
     const athleteIdList = filteredAthletes.map((a) => a.id)
 
     const [{ data: results }, { data: playerPoints }] = await Promise.all([
       supabaseServer
         .from('dt_result_person')
         .select('player_id, mst_age!inner(name, min_age)')
-        .eq('event_id', parseInt(eventId))
+        .eq('event_id', eventIdNumber)
         .in('player_id', athleteIdList),
       supabaseServer
         .from('v_player_point')
         .select('player_id, total_points')
-        .eq('event_id', parseInt(eventId))
+        .eq('event_id', eventIdNumber)
         .in('player_id', athleteIdList),
     ])
 

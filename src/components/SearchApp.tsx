@@ -49,6 +49,10 @@ type DisqualifiedEntry = {
   ageGroup: string
   meet: { id: number; round: number; pool_type: string }
   lane: string | null
+  disqualificationCode: string | null
+  isWithdrawal: boolean
+  playerId: number | null
+  members?: { id: number; name: string; gender: string }[]
 }
 type AthleteHistoryIdentity = {
   id: number
@@ -92,6 +96,27 @@ function teamDisplayName(name: string): string {
 
 function normalizeOptionName(name: string): string {
   return teamDisplayName(name).replace(/\s+/g, '')
+}
+
+const EVENT_TYPE_ORDER = ['自由形', '平泳ぎ', 'バタフライ', '背泳ぎ', '個人メドレー', 'フリーリレー', 'メドレーリレー'] as const
+
+function parseEventName(name: string): { type: string; distance: string; typeIdx: number; distNum: number } {
+  const typeMatch = (EVENT_TYPE_ORDER as readonly string[]).find((t) => name.includes(t))
+  const relayMatch = name.match(/(\d+)×(\d+)m/)
+  const singleMatch = name.match(/^(\d+)m/)
+  const distance = relayMatch ? `${relayMatch[1]}×${relayMatch[2]}m` : singleMatch ? `${singleMatch[1]}m` : ''
+  const distNum = relayMatch ? parseInt(relayMatch[2]) : singleMatch ? parseInt(singleMatch[1]) : 0
+  return {
+    type: typeMatch ?? name,
+    distance,
+    typeIdx: typeMatch != null ? (EVENT_TYPE_ORDER as readonly string[]).indexOf(typeMatch) : 99,
+    distNum,
+  }
+}
+
+function formatEventDisplay(name: string): string {
+  const { type, distance } = parseEventName(name)
+  return distance ? `${type} ${distance}` : name
 }
 
 function normalizeRelayMeetRecordTeamName(name: string): string {
@@ -172,6 +197,8 @@ function formatPointDifference(points: number): string {
 const PREF_ORDER = ['千葉', '東京', '埼玉', '神奈川', '栃木', '群馬', '福島', '兵庫']
 
 function genderDisplay(gender: string): string {
+  if (gender === '男' || gender === '男性') return '男性'
+  if (gender === '女' || gender === '女性') return '女性'
   if (gender === '男子') return '男性'
   if (gender === '女子') return '女性'
   return gender
@@ -690,10 +717,24 @@ function formatDiffTime(meetRecordSec: string | null, timeSec: string | null): s
 
 type SortField = 'rank' | 'name' | 'gender' | 'meet_round' | 'team' | 'event' | 'age' | 'time' | 'dive' | 'points' | 'meet_record' | 'diff'
 type RelaySortField = 'meet_round' | 'team' | 'rank' | 'event' | 'gender' | 'age' | 'time' | 'points' | 'meet_record' | 'diff'
+type MeetRecordSortField = 'age' | 'gender' | 'name' | 'team' | 'record' | 'date'
+
+function meetRecordTimeSeconds(value: string): number {
+  const text = value.trim()
+  if (!text) return Number.POSITIVE_INFINITY
+  if (text.includes(':')) {
+    const [minutes, seconds] = text.split(':')
+    const total = Number(minutes) * 60 + Number(seconds)
+    return Number.isFinite(total) ? total : Number.POSITIVE_INFINITY
+  }
+  const seconds = Number(text)
+  return Number.isFinite(seconds) ? seconds : Number.POSITIVE_INFINITY
+}
 
 const sel =
-  'w-full bg-slate-700/70 border border-slate-600 text-slate-100 rounded px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 cursor-pointer'
+  'w-full bg-[#333b47] border border-slate-600 text-slate-100 rounded px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 cursor-pointer'
 const lbl = 'block text-[10px] font-bold text-cyan-600 uppercase tracking-widest mb-1'
+const SEARCH_LIST_BG = '#333b47'
 
 const RANK_BADGE: Record<number, string> = {
   1: 'bg-gradient-to-b from-yellow-200 to-amber-500 text-amber-900 shadow shadow-amber-400/60',
@@ -877,9 +918,14 @@ export default function SearchApp({
   const [athleteForHistory, setAthleteForHistory] = useState<{ id: number; name: string; gender: string; teamName: string } | null>(null)
   const [athleteHistory, setAthleteHistory] = useState<AthleteHistoryMeet[] | null>(null)
   const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyDisqualification, setHistoryDisqualification] = useState<{
+    code: string | null
+    isWithdrawal: boolean
+  } | null>(null)
   const [activeTab, setActiveTab] = useState<MainTab>('results')
   const [resultFilter, setResultFilter] = useState<ResultFilter>('all')
   const [athleteDetailView, setAthleteDetailView] = useState<AthleteDetailView>('overview')
+  const [athleteDetailOpenSections, setAthleteDetailOpenSections] = useState<Set<'records' | 'trends' | 'age-rank'>>(new Set(['records', 'trends', 'age-rank']))
   const [teamStandings, setTeamStandings] = useState<TeamStanding[]>([])
   const [teamHistoryStandings, setTeamHistoryStandings] = useState<TeamStanding[]>([])
   const [teamStandingsLoading, setTeamStandingsLoading] = useState(false)
@@ -899,13 +945,16 @@ export default function SearchApp({
   const [ageRankResults, setAgeRankResults] = useState<IndividualResult[]>([])
   const [ageRankRelayResults, setAgeRankRelayResults] = useState<RelayResult[]>([])
   const [ageRankLoading, setAgeRankLoading] = useState(false)
-  const [disqualificationView, setDisqualificationView] = useState<'rules' | 'offenders'>('rules')
+  const [disqualificationView, setDisqualificationView] = useState<'rules' | 'offenders'>('offenders')
   const [disqualificationRules, setDisqualificationRules] = useState<DisqualificationRule[]>([])
   const [disqualifiedEntries, setDisqualifiedEntries] = useState<DisqualifiedEntry[]>([])
   const [disqualificationLoading, setDisqualificationLoading] = useState(false)
+  const [dqTypeFilter, setDqTypeFilter] = useState<'all' | 'individual' | 'relay'>('all')
+  const [dqSortKey, setDqSortKey] = useState<string | null>(null)
+  const [dqSortDir, setDqSortDir] = useState<'asc' | 'desc'>('asc')
 
   // 大会新一覧タブ
-  const [mrCourse, setMrCourse] = useState<'短水路' | '長水路'>('短水路')
+  const [mrCourse, setMrCourse] = useState<'' | '短水路' | '長水路'>('')
   const [mrEvent, setMrEvent] = useState('')
   const [mrGender, setMrGender] = useState('')
   const [mrAgeGroup, setMrAgeGroup] = useState('')
@@ -914,6 +963,12 @@ export default function SearchApp({
   const [mrRecords, setMrRecords] = useState<MeetRecord[]>([])
   const [mrLoading, setMrLoading] = useState(false)
   const [mrTeamDropdownOpen, setMrTeamDropdownOpen] = useState(false)
+  const [mrSortField, setMrSortField] = useState<MeetRecordSortField>('age')
+  const [mrSortDir, setMrSortDir] = useState<'asc' | 'desc'>('asc')
+  const [mrMainView, setMrMainView] = useState<'records' | 'ranking'>('records')
+  const [mrClosedCourses, setMrClosedCourses] = useState<Set<string>>(new Set())
+  const [mrRankSort, setMrRankSort] = useState<{ field: 'rank' | 'name' | 'gender' | 'team' | 'total' | 'short' | 'long'; dir: 'asc' | 'desc' }>({ field: 'total', dir: 'desc' })
+  const [mrClosedEvents, setMrClosedEvents] = useState<Set<string>>(new Set())
 
   // Resizable columns (desktop)
   const [leftW, setLeftW] = useState(240)
@@ -990,7 +1045,11 @@ export default function SearchApp({
         map.set(key, { ...e, ids: [e.id] })
       }
     }
-    return [...map.values()]
+    return [...map.values()].sort((a, b) => {
+      const pa = parseEventName(a.name)
+      const pb = parseEventName(b.name)
+      return pa.typeIdx !== pb.typeIdx ? pa.typeIdx - pb.typeIdx : pa.distNum - pb.distNum
+    })
   }, [events])
 
   const currentMeet = meets.find((m) => m.id === meetId)
@@ -1334,11 +1393,13 @@ export default function SearchApp({
   }, [fetchAthleteHistory])
 
   const handleAthleteClick = useCallback((r: IndividualResult) => {
+    setHistoryDisqualification(null)
     fetchAthleteHistory(r.player_id, r.dt_player_person.name, r.dt_player_person.gender, r.dt_player_person.mst_team.name)
     setMobileDrawerOpen(true)
   }, [fetchAthleteHistory])
 
   const handleRelayMemberClick = useCallback((m: RelayMember) => {
+    setHistoryDisqualification(null)
     fetchAthleteHistory(m.player_id, m.dt_player_person?.name ?? '', m.dt_player_person?.gender ?? '')
     setMobileDrawerOpen(true)
   }, [fetchAthleteHistory])
@@ -1573,7 +1634,7 @@ export default function SearchApp({
     if (activeTab !== 'meet-records') return
     setMrLoading(true)
     let cancelled = false
-    fetch(`/api/meet-records?course=${encodeURIComponent(mrCourse)}`)
+    fetch('/api/meet-records')
       .then((r) => r.json())
       .then((data) => {
         if (!cancelled) {
@@ -1583,12 +1644,13 @@ export default function SearchApp({
           setMrAgeGroup('')
           setMrHighlightTeam('')
           setMrHighlightName('')
+          setMrClosedEvents(new Set())
           setMrLoading(false)
         }
       })
       .catch(() => { if (!cancelled) setMrLoading(false) })
     return () => { cancelled = true }
-  }, [activeTab, mrCourse])
+  }, [activeTab])
 
   useEffect(() => {
     if (!mrTeamDropdownOpen) return
@@ -1646,19 +1708,24 @@ export default function SearchApp({
   // ── Age-rank filter panel ──────────────────────────────────────
   // 大会新一覧 derived values
   const mrUniqueEvents = useMemo(() =>
-    [...new Set(mrRecords.map((r) => `${r.event} ${r.distance}`))].sort((a, b) => a.localeCompare(b, 'ja'))
+    [...new Set(mrRecords.map((r) => `${r.event} ${r.distance}`))].sort((a, b) => {
+      const pa = parseEventName(a)
+      const pb = parseEventName(b)
+      return pa.typeIdx !== pb.typeIdx ? pa.typeIdx - pb.typeIdx : pa.distNum - pb.distNum
+    })
   , [mrRecords])
   const mrUniqueAgeGroups = useMemo(() =>
     [...new Set(mrRecords.map((r) => r.age_group))].sort((a, b) => a - b)
   , [mrRecords])
   const mrFiltered = useMemo(() => {
     return mrRecords.filter((r) => {
+      if (mrCourse && r.course !== mrCourse) return false
       if (mrEvent && `${r.event} ${r.distance}` !== mrEvent) return false
-      if (mrGender && r.gender !== mrGender) return false
+      if (mrGender && genderDisplay(r.gender) !== mrGender) return false
       if (mrAgeGroup && String(r.age_group) !== mrAgeGroup) return false
       return true
     })
-  }, [mrRecords, mrEvent, mrGender, mrAgeGroup])
+  }, [mrRecords, mrCourse, mrEvent, mrGender, mrAgeGroup])
   const mrUniqueTeams = useMemo(() =>
     [...new Set(mrRecords.filter(r => !r.is_relay && r.team_name).map(r => r.team_name as string))]
       .sort((a, b) => a.localeCompare(b, 'ja'))
@@ -1692,43 +1759,111 @@ export default function SearchApp({
     if (!mrHighlightTeam) return 'すべて'
     return teamDisplayName(mrHighlightTeam)
   }, [mrHighlightTeam])
-  const mrGroupedByEvent = useMemo(() => {
-    const groups = new Map<string, MeetRecord[]>()
-    for (const r of mrFiltered) {
-      const key = `${r.event} ${r.distance}`
-      if (!groups.has(key)) groups.set(key, [])
-      groups.get(key)!.push(r)
+  const handleMeetRecordSort = useCallback((field: MeetRecordSortField) => {
+    if (mrSortField === field) {
+      setMrSortDir((current) => current === 'asc' ? 'desc' : 'asc')
+    } else {
+      setMrSortField(field)
+      setMrSortDir(field === 'date' ? 'desc' : 'asc')
     }
-    return groups
-  }, [mrFiltered])
+  }, [mrSortField])
+  const mrSortedFiltered = useMemo(() => {
+    const valueFor = (r: MeetRecord, field: MeetRecordSortField): string | number => {
+      if (field === 'age') return r.age_group
+      if (field === 'gender') return genderDisplay(r.gender)
+      if (field === 'name') return r.is_relay ? meetRecordRelayMembers(r) : (r.athlete_name ?? '')
+      if (field === 'team') return r.is_relay ? meetRecordRelayTeam(r) : (r.team_name ?? '')
+      if (field === 'record') return meetRecordTimeSeconds(r.record)
+      if (field === 'date') return r.established_date ? Date.parse(r.established_date) : Number.POSITIVE_INFINITY
+      return ''
+    }
+    return [...mrFiltered].sort((a, b) => {
+      const av = valueFor(a, mrSortField)
+      const bv = valueFor(b, mrSortField)
+      let cmp = 0
+      if (typeof av === 'number' && typeof bv === 'number') {
+        cmp = av - bv
+      } else {
+        cmp = String(av).localeCompare(String(bv), 'ja')
+      }
+      if (cmp === 0) {
+        const eventCmp = `${a.event} ${a.distance}`.localeCompare(`${b.event} ${b.distance}`, 'ja')
+        cmp = eventCmp !== 0 ? eventCmp : a.age_group - b.age_group
+      }
+      return mrSortDir === 'asc' ? cmp : -cmp
+    })
+  }, [mrFiltered, mrSortField, mrSortDir])
+  const mrGroupedByEvent = useMemo(() => {
+    const buildMap = (records: MeetRecord[]) => {
+      const groups = new Map<string, MeetRecord[]>()
+      for (const r of records) {
+        const key = `${r.event} ${r.distance}`
+        if (!groups.has(key)) groups.set(key, [])
+        groups.get(key)!.push(r)
+      }
+      return groups
+    }
+    return {
+      short: buildMap(mrSortedFiltered.filter((r) => r.course === '短水路')),
+      long: buildMap(mrSortedFiltered.filter((r) => r.course === '長水路')),
+    }
+  }, [mrSortedFiltered])
   const mrAthleteRecords = useMemo(() =>
     mrHighlightName
       ? mrRecords.filter(r => !r.is_relay && r.athlete_name === mrHighlightName)
           .sort((a, b) => {
+            const ad = a.established_date ? Date.parse(a.established_date) : Number.POSITIVE_INFINITY
+            const bd = b.established_date ? Date.parse(b.established_date) : Number.POSITIVE_INFINITY
+            if (ad !== bd) return ad - bd
             if (a.event !== b.event) return a.event.localeCompare(b.event, 'ja')
-            if (a.distance !== b.distance) return a.distance.localeCompare(b.distance)
+            if (a.distance !== b.distance) return a.distance.localeCompare(b.distance, 'ja')
             return a.age_group - b.age_group
           })
       : []
   , [mrRecords, mrHighlightName])
+  const mrSelectedAthlete = useMemo(() => {
+    if (!mrHighlightName || mrAthleteRecords.length === 0) return null
+    const first = mrAthleteRecords[0]
+    return {
+      name: mrHighlightName,
+      gender: genderDisplay(first.gender),
+      teamName: first.team_name ?? '',
+      count: mrAthleteRecords.length,
+    }
+  }, [mrHighlightName, mrAthleteRecords])
+
+  const mrAthleteRanking = useMemo(() => {
+    const map = new Map<string, { name: string; gender: string; teamName: string; shortCount: number; longCount: number }>()
+    for (const r of mrRecords) {
+      if (r.is_relay || !r.athlete_name) continue
+      const key = r.athlete_name
+      if (!map.has(key)) map.set(key, { name: r.athlete_name, gender: r.gender, teamName: r.team_name ?? '', shortCount: 0, longCount: 0 })
+      const entry = map.get(key)!
+      if (r.course === '短水路') entry.shortCount++
+      else if (r.course === '長水路') entry.longCount++
+    }
+    return [...map.values()]
+      .map(e => ({ ...e, total: e.shortCount + e.longCount }))
+      .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name, 'ja'))
+  }, [mrRecords])
 
   const meetRecordsFilterPanel = (
     <div className="flex flex-col gap-3.5 p-4">
       <div>
         <label className={lbl}>水路</label>
         <div className="flex gap-1">
-          {(['短水路', '長水路'] as const).map((c) => (
+          {(['短水路', '長水路'] as const).map((val) => (
             <button
-              key={c}
+              key={val}
               type="button"
-              onClick={() => setMrCourse(c)}
+              onClick={() => setMrCourse(mrCourse === val ? '' : val)}
               className={`flex-1 py-1.5 rounded text-xs font-bold transition-colors ${
-                mrCourse === c
+                mrCourse === val
                   ? 'bg-sky-600 text-white'
                   : 'bg-slate-700 text-slate-400 hover:bg-slate-600 hover:text-slate-200'
               }`}
             >
-              {c}
+              {val}
             </button>
           ))}
         </div>
@@ -1763,13 +1898,14 @@ export default function SearchApp({
         <label className={lbl}>性別</label>
         <select
           className={sel}
+          style={{ color: mrGender === '男性' ? '#38bdf8' : mrGender === '女性' ? '#fb7185' : mrGender === '混合' ? '#c084fc' : '', backgroundColor: SEARCH_LIST_BG }}
           value={mrGender}
           onChange={(e) => { setMrGender(e.target.value); setMrHighlightTeam(''); setMrHighlightName('') }}
         >
-          <option value="">すべて</option>
-          <option value="女">女</option>
-          <option value="男">男</option>
-          <option value="混合">混合（リレー）</option>
+          <option value="" style={{ backgroundColor: SEARCH_LIST_BG, color: '#e5e7eb' }}>すべて</option>
+          <option value="男性" style={{ backgroundColor: SEARCH_LIST_BG, color: '#38bdf8' }}>男性</option>
+          <option value="女性" style={{ backgroundColor: SEARCH_LIST_BG, color: '#fb7185' }}>女性</option>
+          <option value="混合" style={{ backgroundColor: SEARCH_LIST_BG, color: '#c084fc' }}>混合</option>
         </select>
       </div>
 
@@ -1789,105 +1925,6 @@ export default function SearchApp({
         </select>
       </div>
 
-      <div>
-        <label className={lbl}>チーム（目立たせ）</label>
-        <div className="relative" ref={mrTeamDropdownRef}>
-          <button
-            type="button"
-            className={`${sel} flex w-full items-center justify-between text-left`}
-            aria-haspopup="listbox"
-            aria-expanded={mrTeamDropdownOpen}
-            onClick={() => setMrTeamDropdownOpen((open) => !open)}
-          >
-            <span className={mrHighlightTeam ? 'text-slate-200' : 'text-slate-400'}>
-              {mrHighlightTeamLabel}
-            </span>
-            <span className={`text-slate-500 transition-transform ${mrTeamDropdownOpen ? 'rotate-180' : ''}`}>
-              ▾
-            </span>
-          </button>
-
-          {mrTeamDropdownOpen && (
-            <div className="absolute left-0 right-0 z-30 mt-1 overflow-hidden rounded-xl border border-slate-600 bg-slate-800 shadow-2xl">
-              <div className="max-h-80 overflow-y-auto py-1.5">
-                <button
-                  type="button"
-                  className={`mx-1 mb-1 block w-[calc(100%-0.5rem)] rounded-lg px-3 py-2 text-left text-sm transition-colors ${
-                    !mrHighlightTeam
-                      ? 'bg-sky-900/60 text-sky-100'
-                      : 'text-slate-200 hover:bg-slate-700/70'
-                  }`}
-                  onClick={() => {
-                    setMrHighlightTeam('')
-                    setMrHighlightName('')
-                    setMrTeamDropdownOpen(false)
-                  }}
-                >
-                  すべて
-                </button>
-
-                {mrTeamGroupOptions.map((group) => (
-                  <div key={group.pref} className="px-1 pb-1">
-                    <div
-                      className="mb-1 rounded-md border border-slate-600/80 bg-slate-700/95 px-3 py-1.5"
-                      role="presentation"
-                    >
-                      <span className="text-xs font-bold tracking-[0.18em] text-slate-100">
-                        -- {group.pref} ----
-                      </span>
-                    </div>
-
-                    <div className="space-y-0.5">
-                      {group.teams.map((team) => {
-                        const isSelected = mrHighlightTeam === team.value && !team.disabled
-                        return (
-                          <button
-                            key={team.id}
-                            type="button"
-                            disabled={team.disabled}
-                            aria-disabled={team.disabled}
-                            className={`block w-full rounded-lg px-3 py-2 text-left text-sm transition-colors ${
-                              team.disabled
-                                ? 'cursor-not-allowed text-slate-400'
-                                : isSelected
-                                  ? 'bg-emerald-500/10 text-emerald-200 shadow-[inset_0_0_0_1px_rgba(74,222,128,0.35),0_0_14px_rgba(74,222,128,0.18)]'
-                                  : 'text-emerald-300 [text-shadow:0_0_10px_rgba(74,222,128,0.35)] hover:bg-slate-700/70 hover:text-emerald-200 hover:[text-shadow:0_0_14px_rgba(74,222,128,0.45)]'
-                            }`}
-                            onClick={() => {
-                              if (team.disabled) return
-                              setMrHighlightTeam(team.value)
-                              setMrHighlightName('')
-                              setMrTeamDropdownOpen(false)
-                            }}
-                          >
-                            {team.label}
-                          </button>
-                        )
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {mrHighlightTeam && mrTeamAthletes.length > 0 && (
-        <div>
-          <label className={lbl}>選手（{mrHighlightTeam}）</label>
-          <select
-            className={sel}
-            value={mrHighlightName}
-            onChange={(e) => setMrHighlightName(e.target.value)}
-          >
-            <option value="">全員</option>
-            {mrTeamAthletes.map((n) => (
-              <option key={n} value={n}>{n}</option>
-            ))}
-          </select>
-        </div>
-      )}
 
       <button
         onClick={() => { setMrEvent(''); setMrGender(''); setMrAgeGroup(''); setMrHighlightTeam(''); setMrHighlightName('') }}
@@ -2072,6 +2109,45 @@ export default function SearchApp({
     </div>
   )
 
+  const filteredAndSortedOffenders = useMemo(() => {
+    let entries = disqualifiedEntries
+    if (dqTypeFilter === 'individual') entries = entries.filter((e) => e.type === '個人')
+    if (dqTypeFilter === 'relay') entries = entries.filter((e) => e.type === 'リレー')
+    if (!dqSortKey) return entries
+    return [...entries].sort((a, b) => {
+      let av: string | number
+      let bv: string | number
+      switch (dqSortKey) {
+        case '大会': av = a.meet.round; bv = b.meet.round; break
+        case '区分': av = a.type; bv = b.type; break
+        case '選手名': av = a.name; bv = b.name; break
+        case '性別': av = a.gender; bv = b.gender; break
+        case 'チーム': av = a.team; bv = b.team; break
+        case '競技名': av = a.event; bv = b.event; break
+        case '年齢区分': av = a.ageGroup; bv = b.ageGroup; break
+        case '失格区分':
+          av = a.disqualificationCode ? '失格' : a.isWithdrawal ? '棄権' : ''
+          bv = b.disqualificationCode ? '失格' : b.isWithdrawal ? '棄権' : ''
+          break
+        case '失格コード': av = a.disqualificationCode ?? ''; bv = b.disqualificationCode ?? ''; break
+        default: return 0
+      }
+      const cmp = typeof av === 'number'
+        ? (av as number) - (bv as number)
+        : (av as string).localeCompare(bv as string, 'ja')
+      return dqSortDir === 'asc' ? cmp : -cmp
+    })
+  }, [disqualifiedEntries, dqTypeFilter, dqSortKey, dqSortDir])
+
+  const handleDqSort = (key: string) => {
+    if (dqSortKey === key) {
+      setDqSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setDqSortKey(key)
+      setDqSortDir('asc')
+    }
+  }
+
   const disqualificationFilterPanel = (
     <div className="flex flex-col gap-3.5 p-4">
       <div>
@@ -2107,11 +2183,24 @@ export default function SearchApp({
         </select>
       </div>
       <div>
-        <label className={lbl}>性別（2）</label>
-        <select className={sel} value={gender} onChange={(e) => setGender(e.target.value)}>
-          <option value="">すべて</option>
-          <option value="男子">男子</option>
-          <option value="女子">女子</option>
+        <label className={lbl}>性別</label>
+        <select
+          className={sel}
+          style={{ color: gender === '男子' ? '#38bdf8' : gender === '女子' ? '#fb7185' : '', backgroundColor: SEARCH_LIST_BG }}
+          value={gender}
+          onChange={(e) => setGender(e.target.value)}
+        >
+          <option value="" style={{ backgroundColor: SEARCH_LIST_BG, color: '#e5e7eb' }}>すべて</option>
+          <option value="男子" style={{ backgroundColor: SEARCH_LIST_BG, color: '#38bdf8' }}>男子</option>
+          <option value="女子" style={{ backgroundColor: SEARCH_LIST_BG, color: '#fb7185' }}>女子</option>
+        </select>
+      </div>
+      <div>
+        <label className={lbl}>個人/リレー（3）</label>
+        <select className={sel} value={dqTypeFilter} onChange={(e) => setDqTypeFilter(e.target.value as 'all' | 'individual' | 'relay')}>
+          <option value="all">すべて</option>
+          <option value="individual">個人</option>
+          <option value="relay">リレー</option>
         </select>
       </div>
     </div>
@@ -2174,7 +2263,7 @@ export default function SearchApp({
           ) : (
             <select
               className={sel}
-              style={{ background: '#333b47' }}
+              style={{ background: SEARCH_LIST_BG }}
               value={athleteId ?? ''}
               onChange={(e) => handleAthleteFilterChange(e.target.value)}
             >
@@ -2219,7 +2308,7 @@ export default function SearchApp({
                   .filter((e) => e.type === '個人')
                   .map((e) => (
                     <option key={e.ids.join(',')} value={e.ids.join(',')}>
-                      {e.name}
+                      {formatEventDisplay(e.name)}
                     </option>
                   ))}
               </optgroup>
@@ -2228,7 +2317,7 @@ export default function SearchApp({
                   .filter((e) => e.type === 'リレー')
                   .map((e) => (
                     <option key={e.ids.join(',')} value={e.ids.join(',')}>
-                      {e.name}
+                      {formatEventDisplay(e.name)}
                     </option>
                   ))}
               </optgroup>
@@ -2237,11 +2326,16 @@ export default function SearchApp({
 
           <div>
             <label className={lbl}>性別</label>
-            <select className={sel} value={gender} onChange={(e) => setGender(e.target.value)}>
-              <option value="">すべて</option>
-              <option value="男子">男子</option>
-              <option value="女子">女子</option>
-              <option value="混合">混合（リレー）</option>
+            <select
+              className={sel}
+              style={{ color: gender === '男子' ? '#38bdf8' : gender === '女子' ? '#fb7185' : gender === '混合' ? '#c084fc' : '', backgroundColor: SEARCH_LIST_BG }}
+              value={gender}
+              onChange={(e) => setGender(e.target.value)}
+            >
+              <option value="" style={{ backgroundColor: SEARCH_LIST_BG, color: '#e5e7eb' }}>すべて</option>
+              <option value="男子" style={{ backgroundColor: SEARCH_LIST_BG, color: '#38bdf8' }}>男子</option>
+              <option value="女子" style={{ backgroundColor: SEARCH_LIST_BG, color: '#fb7185' }}>女子</option>
+              <option value="混合" style={{ backgroundColor: SEARCH_LIST_BG, color: '#c084fc' }}>混合</option>
             </select>
           </div>
 
@@ -2351,6 +2445,85 @@ export default function SearchApp({
   )
 
   // ── Individual results table ─────────────────────────────────
+  const tabPageTitles: Partial<Record<MainTab, { title: string; icon: string; glow: string; accent: string }>> = {
+    results: { title: '競技結果', icon: '🏁', glow: 'from-sky-300 via-cyan-100 to-blue-300', accent: 'bg-sky-400' },
+    team: { title: 'チーム順位', icon: '🏆', glow: 'from-amber-300 via-yellow-100 to-orange-300', accent: 'bg-amber-400' },
+    'relay-optimize': { title: 'リレー最適化', icon: '🔁', glow: 'from-indigo-300 via-cyan-100 to-emerald-300', accent: 'bg-indigo-400' },
+    'age-rank': { title: '年代別順位', icon: '📊', glow: 'from-emerald-300 via-cyan-100 to-sky-300', accent: 'bg-emerald-400' },
+    disqualification: { title: '失格/棄権一覧', icon: '⚠️', glow: 'from-red-300 via-amber-100 to-orange-300', accent: 'bg-red-400' },
+  }
+  const activeTabPageTitle = tabPageTitles[activeTab]
+  const titleTeamStanding = activeTab === 'team' && selectedTeam
+    ? teamStandings.find((standing) => selectedTeam.ids.includes(standing.mst_team.id))
+    : null
+  const resultFilterButtons = (
+    <div className="flex items-center gap-1.5">
+      {(['all', 'individual', 'relay'] as ResultFilter[]).map((filter) => {
+        const labels: Record<ResultFilter, string> = { all: 'すべて', individual: '個人競技', relay: 'リレー' }
+        const active = resultFilter === filter
+        return (
+          <button
+            key={filter}
+            type="button"
+            onClick={() => handleResultFilterChange(filter)}
+            className={`rounded-full px-3 py-1.5 text-xs font-semibold transition-colors ${
+              active
+                ? 'bg-sky-600 text-white shadow-[0_0_12px_rgba(14,165,233,0.35)]'
+                : 'bg-[#333b47] text-slate-300 hover:bg-slate-600 hover:text-white'
+            }`}
+          >
+            {labels[filter]}
+          </button>
+        )
+      })}
+    </div>
+  )
+  const pageTitleContext = activeTab === 'results'
+    ? resultFilterButtons
+    : activeTab === 'team' && selectedTeam && currentMeet
+      ? (
+        <span className="text-sm font-semibold text-slate-200">
+          <span className="text-cyan-300">{selectedTeam.displayName}</span>
+          <span className="text-slate-500"> · </span>
+          第{currentMeet.round}回大会
+          <span className="ml-1 text-amber-300">{titleTeamStanding?.rank ?? '－'}位</span>
+          <span className="ml-1 text-slate-300">/ {teamStandings.length}チーム中</span>
+        </span>
+      )
+      : activeTab === 'age-rank' && ageRankCurrentMeet && selectedAgeRankEvent && ageRankGender
+        ? (
+          <span className="text-sm font-semibold text-slate-300">
+            第{ageRankCurrentMeet.round}回
+            <span className="mx-2 text-slate-600">|</span>
+            <span className={ageRankGender === '男子' ? 'text-sky-300' : ageRankGender === '女子' ? 'text-rose-300' : 'text-purple-300'}>
+              {ageRankGender}
+            </span>
+            <span className="mx-2 text-slate-600">|</span>
+            <span className="text-white">{selectedAgeRankEvent.name}</span>
+            {ageRankAgeName && (
+              <>
+                <span className="mx-2 text-slate-600">|</span>
+                <span>{ageRankAgeName}</span>
+              </>
+            )}
+          </span>
+        )
+        : null
+  const glowingTabTitle = activeTabPageTitle && (
+    <div className="sticky top-0 z-30 shrink-0 border-b border-slate-700/70 bg-slate-950/95 px-4 py-3 shadow-lg shadow-slate-950/60 backdrop-blur">
+      <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-3 gap-y-2">
+        <span className={`h-8 w-1 rounded-full ${activeTabPageTitle.accent} shadow-[0_0_14px_rgba(125,211,252,0.7)]`} />
+        <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-[#333b47] text-lg shadow-[0_0_18px_rgba(148,163,184,0.35)]">
+          {activeTabPageTitle.icon}
+        </span>
+        <h1 className={`text-lg font-black tracking-wide bg-gradient-to-r ${activeTabPageTitle.glow} bg-clip-text text-transparent drop-shadow-[0_0_12px_rgba(255,255,255,0.35)] sm:text-xl`}>
+          {activeTabPageTitle.title}
+        </h1>
+        {pageTitleContext && <div className="flex min-w-0 items-center sm:ml-2">{pageTitleContext}</div>}
+      </div>
+    </div>
+  )
+
   const selectedAthlete = athleteId ? uniqueAthletes.find((a) => a.id === athleteId) : null
   const contextChips: { label: string; color: string }[] = []
   if (currentMeet) contextChips.push({ label: `第${currentMeet.round}回`, color: 'text-slate-400' })
@@ -2646,7 +2819,7 @@ export default function SearchApp({
     { id: 'athlete', label: '選手詳細', disabled: !athleteForHistory },
     { id: 'age-rank', label: '年代別順位' },
     { id: 'meet-records', label: '大会新一覧' },
-    { id: 'disqualification', label: '失格ルール' },
+    { id: 'disqualification', label: '失格/棄権一覧' },
   ]
 
   const athleteAnalysis = useMemo(() => {
@@ -2759,7 +2932,6 @@ export default function SearchApp({
   const selectedAthleteProfile = athleteForHistory
     ? getAthleteProfile(athleteForHistory.id, athleteForHistory.teamName)
     : null
-
   const tabBar = (
     <div className="shrink-0 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 border-b border-slate-700/60 flex items-stretch">
       {/* Tabs — horizontally scrollable */}
@@ -2852,35 +3024,7 @@ export default function SearchApp({
             <p className="text-center py-12 text-slate-500 text-sm">記録が見つかりません</p>
           ) : (
             <div>
-              <div className="mb-6 flex rounded-xl border border-slate-700 bg-slate-900/70 p-1" role="tablist" aria-label="選手詳細の表示">
-                {([
-                  ['overview', '概要'],
-                  ['trends', '推移'],
-                  ['records', '記録'],
-                  ['age-rank-indiv', '年代順位'],
-                ] as [AthleteDetailView, string][]).map(([id, label]) => {
-                  const active = athleteDetailView === id
-                  return (
-                    <button
-                      key={id}
-                      type="button"
-                      role="tab"
-                      aria-selected={active}
-                      onClick={() => handleAthleteViewChange(id)}
-                      className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${
-                        active
-                          ? 'bg-sky-500/20 text-sky-300 shadow-sm'
-                          : 'text-slate-500 hover:bg-slate-800 hover:text-slate-300'
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  )
-                })}
-              </div>
-
-              {athleteDetailView === 'overview' && (
-                <>
+              {/* Stat cards */}
               <div className="grid grid-cols-2 gap-3 mb-6 sm:grid-cols-3 lg:grid-cols-6">
                 {[
                   ['出場大会', `${athleteAnalysis.meetCount}回`],
@@ -2920,96 +3064,129 @@ export default function SearchApp({
                   </div>
                 </div>
               )}
-                </>
-              )}
 
-              {athleteDetailView === 'trends' && (
-                <div>
-              <div className="mb-3">
-                <h3 className="text-sm font-bold text-white">競技名別タイム推移</h3>
-                <p className="text-[11px] text-slate-500 mt-0.5">グラフ上側ほど速いタイムです。黄色は自己ベストを示します。</p>
-              </div>
-              {athleteAnalysis.trends.length === 0 ? (
-                <p className="rounded-xl border border-slate-700 py-10 text-center text-sm text-slate-500">
-                  タイム推移を表示できる個人記録がありません
-                </p>
-              ) : (
-                <div className="grid gap-4 lg:grid-cols-2">
-                  {athleteAnalysis.trends.map((trend) => (
-                    <AthleteTrendCard key={trend.key} trend={trend} />
-                  ))}
-                </div>
-              )}
-                </div>
-              )}
-
-              {athleteDetailView === 'records' && (
-                <div className="space-y-5">
-                  {athleteHistory.map((meet) => (
-                    <section key={meet.round} className="overflow-hidden rounded-xl border border-slate-700 bg-slate-900/50">
-                      <div className="flex items-center justify-between border-b border-slate-700 bg-slate-800/60 px-4 py-3">
-                        <h3 className="text-sm font-bold text-sky-300">第{meet.round}回（{meet.pool_type}）</h3>
-                        <div className="flex items-center gap-3">
-                          <span className="text-[10px] text-sky-700">個人行クリック → 年代別順位</span>
-                          <span className="text-xs text-slate-500">
-                            {meet.individual.length + meet.relay.length}レース
-                          </span>
+              {/* 記録 collapsible block */}
+              <div className="mb-5">
+                <button
+                  type="button"
+                  className="w-full flex items-center justify-between px-4 py-3 rounded-xl border border-slate-700 bg-slate-800/60 hover:bg-slate-700/60 transition-colors mb-1"
+                  onClick={() => setAthleteDetailOpenSections(prev => { const n = new Set(prev); n.has('records') ? n.delete('records') : n.add('records'); return n })}
+                >
+                  <span className="text-sm font-bold text-white">記録</span>
+                  <span className="text-slate-400 text-xs">{athleteDetailOpenSections.has('records') ? '▲' : '▼'}</span>
+                </button>
+                {athleteDetailOpenSections.has('records') && (
+                  <div className="space-y-5">
+                    {athleteHistory.map((meet) => (
+                      <section key={meet.round} className="overflow-hidden rounded-xl border border-slate-700 bg-slate-900/50">
+                        <div className="flex items-center justify-between border-b border-slate-700 bg-slate-800/60 px-4 py-3">
+                          <h3 className="text-sm font-bold text-sky-300">第{meet.round}回（{meet.pool_type}）</h3>
+                          <div className="flex items-center gap-3">
+                            <span className="text-[10px] text-sky-700">個人行クリック → 年代別順位</span>
+                            <span className="text-xs text-slate-500">
+                              {meet.individual.length + meet.relay.length}レース
+                            </span>
+                          </div>
                         </div>
-                      </div>
-                      <div className="overflow-x-auto">
-                        <table className="w-full min-w-[560px] text-xs">
-                          <thead className="text-slate-500">
-                            <tr>
-                              <th className="px-4 py-2 text-left font-medium">区分</th>
-                              <th className="px-3 py-2 text-left font-medium">競技名</th>
-                              <th className="px-3 py-2 text-left font-medium">年齢区分</th>
-                              <th className="px-3 py-2 text-right font-medium">タイム</th>
-                              <th className="px-3 py-2 text-right font-medium">順位</th>
-                              <th className="px-4 py-2 text-right font-medium">得点</th>
-                              <th className="px-2 py-2 w-6" />
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {meet.individual.map((result, index) => (
-                              <tr
-                                key={`individual-${index}`}
-                                className="group border-t border-slate-800 cursor-pointer hover:bg-sky-950/40 transition-colors"
-                                onClick={() => handleJumpToAgeRank(meet.round, result.event, result.age_group)}
-                                title="年代別順位タブで同条件を表示"
-                              >
-                                <td className="px-4 py-2 text-sky-400">個人</td>
-                                <td className="px-3 py-2 text-slate-200">{result.event}</td>
-                                <td className="px-3 py-2 text-slate-400">{result.age_group}</td>
-                                <td className="px-3 py-2 text-right font-mono text-white">
-                                  {result.time_display ?? '－'}
-                                  {result.is_meet_record && <span className="ml-1 text-amber-400">★</span>}
-                                </td>
-                                <td className="px-3 py-2 text-right text-slate-300">{result.rank != null ? `${result.rank}位` : '－'}</td>
-                                <td className="px-4 py-2 text-right text-amber-400">{result.points != null ? `${formatPoints(result.points)}pt` : '－'}</td>
-                                <td className="px-2 py-2 text-right">
-                                  <span className="opacity-0 group-hover:opacity-100 transition-opacity text-sky-500 text-[10px] font-bold">→</span>
-                                </td>
+                        <div className="overflow-x-auto">
+                          <table className="w-full min-w-[560px] text-xs">
+                            <thead className="text-slate-500">
+                              <tr>
+                                <th className="px-4 py-2 text-left font-medium">区分</th>
+                                <th className="px-3 py-2 text-left font-medium">競技名</th>
+                                <th className="px-3 py-2 text-left font-medium">年齢区分</th>
+                                <th className="px-3 py-2 text-right font-medium">タイム</th>
+                                <th className="px-3 py-2 text-right font-medium">順位</th>
+                                <th className="px-4 py-2 text-right font-medium">得点</th>
+                                <th className="px-2 py-2 w-6" />
                               </tr>
-                            ))}
-                            {meet.relay.map((result, index) => (
-                              <tr key={`relay-${index}`} className="border-t border-slate-800">
-                                <td className="px-4 py-2 text-indigo-400">リレー</td>
-                                <td className="px-3 py-2 text-slate-200">{result.event}</td>
-                                <td className="px-3 py-2 text-slate-400">{result.age_group ?? '－'}</td>
-                                <td className="px-3 py-2 text-right font-mono text-white">{result.time_display ?? '－'}</td>
-                                <td className="px-3 py-2 text-right text-slate-300">{result.rank != null ? `${result.rank}位` : '－'}</td>
-                                <td className="px-4 py-2 text-right text-amber-400">{result.team_points != null ? `${formatPoints(result.team_points)}pt` : '－'}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </section>
-                  ))}
-                </div>
-              )}
+                            </thead>
+                            <tbody>
+                              {meet.individual.map((result, index) => (
+                                <tr
+                                  key={`individual-${index}`}
+                                  className="group border-t border-slate-800 cursor-pointer hover:bg-sky-950/40 transition-colors"
+                                  onClick={() => handleJumpToAgeRank(meet.round, result.event, result.age_group)}
+                                  title="年代別順位タブで同条件を表示"
+                                >
+                                  <td className="px-4 py-2 text-sky-400">個人</td>
+                                  <td className="px-3 py-2 text-slate-200">{result.event}</td>
+                                  <td className="px-3 py-2 text-slate-400">{result.age_group}</td>
+                                  <td className="px-3 py-2 text-right font-mono text-white">
+                                    {result.time_display != null ? (
+                                      <>
+                                        {result.time_display}
+                                        {result.is_meet_record && <span className="ml-1 text-amber-400">★</span>}
+                                      </>
+                                    ) : result.disqualification_code != null ? (
+                                      <span className="text-red-400 font-semibold text-xs">失格 {result.disqualification_code}</span>
+                                    ) : result.is_withdrawal ? (
+                                      <span className="text-slate-400 text-xs">棄権</span>
+                                    ) : '－'}
+                                  </td>
+                                  <td className="px-3 py-2 text-right text-slate-300">{result.rank != null ? `${result.rank}位` : '－'}</td>
+                                  <td className="px-4 py-2 text-right text-amber-400">{result.points != null ? `${formatPoints(result.points)}pt` : '－'}</td>
+                                  <td className="px-2 py-2 text-right">
+                                    <span className="opacity-0 group-hover:opacity-100 transition-opacity text-sky-500 text-[10px] font-bold">→</span>
+                                  </td>
+                                </tr>
+                              ))}
+                              {meet.relay.map((result, index) => (
+                                <tr key={`relay-${index}`} className="border-t border-slate-800">
+                                  <td className="px-4 py-2 text-indigo-400">リレー</td>
+                                  <td className="px-3 py-2 text-slate-200">{result.event}</td>
+                                  <td className="px-3 py-2 text-slate-400">{result.age_group ?? '－'}</td>
+                                  <td className="px-3 py-2 text-right font-mono text-white">
+                                    {result.time_display != null ? result.time_display
+                                      : result.disqualification_code != null ? (
+                                        <span className="text-red-400 font-semibold text-xs">失格 {result.disqualification_code}</span>
+                                      ) : result.is_withdrawal ? (
+                                        <span className="text-slate-400 text-xs">棄権</span>
+                                      ) : '－'}
+                                  </td>
+                                  <td className="px-3 py-2 text-right text-slate-300">{result.rank != null ? `${result.rank}位` : '－'}</td>
+                                  <td className="px-4 py-2 text-right text-amber-400">{result.team_points != null ? `${formatPoints(result.team_points)}pt` : '－'}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </section>
+                    ))}
+                  </div>
+                )}
+              </div>
 
-              {athleteDetailView === 'age-rank-indiv' && (() => {
+              {/* タイム推移 collapsible block */}
+              <div className="mb-5">
+                <button
+                  type="button"
+                  className="w-full flex items-center justify-between px-4 py-3 rounded-xl border border-slate-700 bg-slate-800/60 hover:bg-slate-700/60 transition-colors mb-1"
+                  onClick={() => setAthleteDetailOpenSections(prev => { const n = new Set(prev); n.has('trends') ? n.delete('trends') : n.add('trends'); return n })}
+                >
+                  <span className="text-sm font-bold text-white">タイム推移</span>
+                  <span className="text-slate-400 text-xs">{athleteDetailOpenSections.has('trends') ? '▲' : '▼'}</span>
+                </button>
+                {athleteDetailOpenSections.has('trends') && (
+                  <div>
+                    <p className="text-[11px] text-slate-500 mb-3">グラフ上側ほど速いタイムです。黄色は自己ベストを示します。</p>
+                    {athleteAnalysis.trends.length === 0 ? (
+                      <p className="rounded-xl border border-slate-700 py-10 text-center text-sm text-slate-500">
+                        タイム推移を表示できる個人記録がありません
+                      </p>
+                    ) : (
+                      <div className="grid gap-4 lg:grid-cols-2">
+                        {athleteAnalysis.trends.map((trend) => (
+                          <AthleteTrendCard key={trend.key} trend={trend} />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* 年代順位 collapsible block */}
+              {(() => {
                 const allIndResults = athleteHistory
                   .flatMap((meet) =>
                     meet.individual.map((r) => ({ ...r, round: meet.round, poolType: meet.pool_type }))
@@ -3020,90 +3197,101 @@ export default function SearchApp({
                     if (ra !== rb) return ra - rb
                     return b.round - a.round
                   })
-                if (allIndResults.length === 0) {
-                  return (
-                    <p className="rounded-xl border border-slate-700 py-10 text-center text-sm text-slate-500">
-                      個人記録がありません
-                    </p>
-                  )
-                }
                 return (
-                  <div>
-                    <div className="mb-3 flex items-center justify-between">
-                      <p className="text-[11px] text-slate-500">全大会の個人レース一覧・年代内順位の高い順に表示</p>
-                      <p className="text-[10px] text-sky-600">行クリック → 年代別順位タブへ移動</p>
-                    </div>
-                    <div className="overflow-x-auto rounded-xl border border-slate-700">
-                      <table className="w-full min-w-[600px] text-xs">
-                        <thead>
-                          <tr className="bg-gradient-to-r from-sky-950 to-indigo-950 text-left border-b border-sky-800/40">
-                            <th className="px-3 py-2.5 font-semibold text-slate-300 w-12 text-center">順位</th>
-                            <th className="px-3 py-2.5 font-semibold text-slate-300">大会</th>
-                            <th className="px-3 py-2.5 font-semibold text-slate-300">競技名</th>
-                            <th className="px-3 py-2.5 font-semibold text-slate-300">年齢区分</th>
-                            <th className="px-3 py-2.5 font-semibold text-slate-300 text-right">タイム</th>
-                            <th className="px-3 py-2.5 font-semibold text-slate-300 text-center">新記録</th>
-                            <th className="px-3 py-2.5 font-semibold text-slate-300 text-right">大会新</th>
-                            <th className="px-3 py-2.5 font-semibold text-slate-300 text-right">大会新差</th>
-                            <th className="px-3 py-2.5 font-semibold text-slate-300 text-right">得点</th>
-                            <th className="px-2 py-2.5 w-5" />
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {allIndResults.map((r, i) => {
-                            const diff = formatDiffTime(r.meet_record_seconds, r.time_seconds)
-                            const isPodium = r.rank != null && r.rank <= 3
-                            return (
-                              <tr
-                                key={`${r.round}-${r.event}-${i}`}
-                                className={`group border-t border-slate-800 cursor-pointer hover:bg-sky-900/30 transition-colors ${isPodium ? 'bg-sky-950/30' : i % 2 === 0 ? 'bg-slate-900/20' : ''}`}
-                                onClick={() => handleJumpToAgeRank(r.round, r.event, r.age_group)}
-                                title="年代別順位タブで同条件を表示"
-                              >
-                                <td className="px-3 py-2 text-center">
-                                  {r.rank === 1 ? (
-                                    <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-gradient-to-b from-yellow-200 to-amber-500 text-[9px] font-black text-amber-900 shadow shadow-amber-400/60">1</span>
-                                  ) : r.rank === 2 ? (
-                                    <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-gradient-to-b from-slate-200 to-slate-400 text-[9px] font-black text-slate-700 shadow shadow-slate-400/60">2</span>
-                                  ) : r.rank === 3 ? (
-                                    <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-gradient-to-b from-amber-500 to-amber-800 text-[9px] font-black text-amber-100 shadow shadow-amber-700/60">3</span>
-                                  ) : (
-                                    <span className="text-slate-400">{r.rank ?? '－'}</span>
-                                  )}
-                                </td>
-                                <td className="px-3 py-2 text-slate-400 whitespace-nowrap">第{r.round}回</td>
-                                <td className="px-3 py-2 text-slate-200 whitespace-nowrap">{r.event}</td>
-                                <td className="px-3 py-2 text-slate-400 whitespace-nowrap">{r.age_group}</td>
-                                <td className="px-3 py-2 text-right font-mono text-white whitespace-nowrap">
-                                  {r.time_display ?? '－'}
-                                </td>
-                                <td className="px-3 py-2 text-center whitespace-nowrap">
-                                  {r.is_meet_record
-                                    ? <span className="inline-block bg-amber-500/20 text-amber-300 text-[10px] px-1.5 py-0.5 rounded border border-amber-500/30">大会新</span>
-                                    : <span className="text-slate-700">－</span>}
-                                </td>
-                                <td className="px-3 py-2 text-right font-mono text-slate-300 whitespace-nowrap">
-                                  {r.meet_record_seconds != null ? formatSplitTime(Number(r.meet_record_seconds)) : <span className="text-slate-700">－</span>}
-                                </td>
-                                <td className="px-3 py-2 text-right font-mono text-xs whitespace-nowrap">
-                                  {diff ? (
-                                    <span className={diff === '大会新' ? 'text-amber-400 font-semibold' : 'text-slate-400'}>
-                                      {diff === '大会新' ? '±0' : diff}
-                                    </span>
-                                  ) : <span className="text-slate-700">－</span>}
-                                </td>
-                                <td className="px-3 py-2 text-right text-amber-400 whitespace-nowrap">
-                                  {r.points != null ? `${formatPoints(r.points)}pt` : <span className="text-slate-600">－</span>}
-                                </td>
-                                <td className="px-2 py-2 text-right">
-                                  <span className="opacity-0 group-hover:opacity-100 transition-opacity text-sky-500 font-bold">→</span>
-                                </td>
-                              </tr>
-                            )
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
+                  <div className="mb-5">
+                    <button
+                      type="button"
+                      className="w-full flex items-center justify-between px-4 py-3 rounded-xl border border-slate-700 bg-slate-800/60 hover:bg-slate-700/60 transition-colors mb-1"
+                      onClick={() => setAthleteDetailOpenSections(prev => { const n = new Set(prev); n.has('age-rank') ? n.delete('age-rank') : n.add('age-rank'); return n })}
+                    >
+                      <span className="text-sm font-bold text-white">年代順位</span>
+                      <span className="text-slate-400 text-xs">{athleteDetailOpenSections.has('age-rank') ? '▲' : '▼'}</span>
+                    </button>
+                    {athleteDetailOpenSections.has('age-rank') && (
+                      allIndResults.length === 0 ? (
+                        <p className="rounded-xl border border-slate-700 py-10 text-center text-sm text-slate-500">
+                          個人記録がありません
+                        </p>
+                      ) : (
+                        <div>
+                          <div className="mb-3 flex items-center justify-between">
+                            <p className="text-[11px] text-slate-500">全大会の個人レース一覧・年代内順位の高い順に表示</p>
+                            <p className="text-[10px] text-sky-600">行クリック → 年代別順位タブへ移動</p>
+                          </div>
+                          <div className="overflow-x-auto rounded-xl border border-slate-700">
+                            <table className="w-full min-w-[600px] text-xs">
+                              <thead>
+                                <tr className="bg-gradient-to-r from-sky-950 to-indigo-950 text-left border-b border-sky-800/40">
+                                  <th className="px-3 py-2.5 font-semibold text-slate-300 w-12 text-center">順位</th>
+                                  <th className="px-3 py-2.5 font-semibold text-slate-300">大会</th>
+                                  <th className="px-3 py-2.5 font-semibold text-slate-300">競技名</th>
+                                  <th className="px-3 py-2.5 font-semibold text-slate-300">年齢区分</th>
+                                  <th className="px-3 py-2.5 font-semibold text-slate-300 text-right">タイム</th>
+                                  <th className="px-3 py-2.5 font-semibold text-slate-300 text-center">新記録</th>
+                                  <th className="px-3 py-2.5 font-semibold text-slate-300 text-right">大会新</th>
+                                  <th className="px-3 py-2.5 font-semibold text-slate-300 text-right">大会新差</th>
+                                  <th className="px-3 py-2.5 font-semibold text-slate-300 text-right">得点</th>
+                                  <th className="px-2 py-2.5 w-5" />
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {allIndResults.map((r, i) => {
+                                  const diff = formatDiffTime(r.meet_record_seconds, r.time_seconds)
+                                  const isPodium = r.rank != null && r.rank <= 3
+                                  return (
+                                    <tr
+                                      key={`${r.round}-${r.event}-${i}`}
+                                      className={`group border-t border-slate-800 cursor-pointer hover:bg-sky-900/30 transition-colors ${isPodium ? 'bg-sky-950/30' : i % 2 === 0 ? 'bg-slate-900/20' : ''}`}
+                                      onClick={() => handleJumpToAgeRank(r.round, r.event, r.age_group)}
+                                      title="年代別順位タブで同条件を表示"
+                                    >
+                                      <td className="px-3 py-2 text-center">
+                                        {r.rank === 1 ? (
+                                          <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-gradient-to-b from-yellow-200 to-amber-500 text-[9px] font-black text-amber-900 shadow shadow-amber-400/60">1</span>
+                                        ) : r.rank === 2 ? (
+                                          <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-gradient-to-b from-slate-200 to-slate-400 text-[9px] font-black text-slate-700 shadow shadow-slate-400/60">2</span>
+                                        ) : r.rank === 3 ? (
+                                          <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-gradient-to-b from-amber-500 to-amber-800 text-[9px] font-black text-amber-100 shadow shadow-amber-700/60">3</span>
+                                        ) : (
+                                          <span className="text-slate-400">{r.rank ?? '－'}</span>
+                                        )}
+                                      </td>
+                                      <td className="px-3 py-2 text-slate-400 whitespace-nowrap">第{r.round}回</td>
+                                      <td className="px-3 py-2 text-slate-200 whitespace-nowrap">{r.event}</td>
+                                      <td className="px-3 py-2 text-slate-400 whitespace-nowrap">{r.age_group}</td>
+                                      <td className="px-3 py-2 text-right font-mono text-white whitespace-nowrap">
+                                        {r.time_display ?? '－'}
+                                      </td>
+                                      <td className="px-3 py-2 text-center whitespace-nowrap">
+                                        {r.is_meet_record
+                                          ? <span className="inline-block bg-amber-500/20 text-amber-300 text-[10px] px-1.5 py-0.5 rounded border border-amber-500/30">大会新</span>
+                                          : <span className="text-slate-700">－</span>}
+                                      </td>
+                                      <td className="px-3 py-2 text-right font-mono text-slate-300 whitespace-nowrap">
+                                        {r.meet_record_seconds != null ? formatSplitTime(Number(r.meet_record_seconds)) : <span className="text-slate-700">－</span>}
+                                      </td>
+                                      <td className="px-3 py-2 text-right font-mono text-xs whitespace-nowrap">
+                                        {diff ? (
+                                          <span className={diff === '大会新' ? 'text-amber-400 font-semibold' : 'text-slate-400'}>
+                                            {diff === '大会新' ? '±0' : diff}
+                                          </span>
+                                        ) : <span className="text-slate-700">－</span>}
+                                      </td>
+                                      <td className="px-3 py-2 text-right text-amber-400 whitespace-nowrap">
+                                        {r.points != null ? `${formatPoints(r.points)}pt` : <span className="text-slate-600">－</span>}
+                                      </td>
+                                      <td className="px-2 py-2 text-right">
+                                        <span className="opacity-0 group-hover:opacity-100 transition-opacity text-sky-500 font-bold">→</span>
+                                      </td>
+                                    </tr>
+                                  )
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )
+                    )}
                   </div>
                 )
               })()}
@@ -3124,6 +3312,7 @@ export default function SearchApp({
   const resultsArea = (
     <div className="h-full overflow-y-auto flex flex-col">
       {tournamentTitle}
+      {glowingTabTitle}
       <div className="p-4 flex-1">
         {loading && activeTab === 'results' && (
           <div className="flex items-center justify-center gap-2 py-12 text-slate-500 text-sm">
@@ -3160,33 +3349,6 @@ export default function SearchApp({
 
         {activeTab === 'results' && !loading && (
           <>
-            <div className="flex gap-1.5 mb-4">
-              {(['all', 'individual', 'relay'] as ResultFilter[]).map((f) => {
-                const labels: Record<ResultFilter, string> = { all: 'すべて', individual: '個人競技', relay: 'リレー' }
-                const counts: Record<ResultFilter, number> = {
-                  all: results.length + relayResults.length,
-                  individual: results.length,
-                  relay: relayResults.length,
-                }
-                const active = resultFilter === f
-                return (
-                  <button
-                    key={f}
-                    onClick={() => handleResultFilterChange(f)}
-                    className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
-                      active
-                        ? 'bg-sky-600 text-white'
-                        : 'bg-slate-700/60 text-slate-400 hover:bg-slate-600/60 hover:text-slate-200'
-                    }`}
-                  >
-                    {labels[f]}
-                    <span className={`ml-1.5 text-[10px] ${active ? 'text-sky-200' : 'text-slate-600'}`}>
-                      {counts[f]}
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
             {resultFilter === 'all' && (individualTable || relayTable) && (
               <div>{individualTable}{relayTable}</div>
             )}
@@ -3561,7 +3723,7 @@ export default function SearchApp({
         {activeTab === 'meet-records' && (
           <div className="max-w-5xl mx-auto">
             {/* キラキラタイトル */}
-            <div className="mb-5 text-center">
+            <div className="sticky top-0 z-20 -mx-3 mb-5 border-b border-slate-800/80 bg-slate-900/95 px-3 py-3 text-center backdrop-blur">
               <div className="inline-flex items-center gap-3">
                 <span className="text-amber-400 text-base animate-pulse select-none">✦✦</span>
                 <h2 className="text-2xl font-black bg-gradient-to-r from-amber-400 via-yellow-100 to-amber-400 bg-clip-text text-transparent drop-shadow-[0_0_16px_rgba(251,191,36,0.5)]">
@@ -3570,11 +3732,34 @@ export default function SearchApp({
                 <span className="text-amber-400 text-base animate-pulse select-none">✦✦</span>
               </div>
               <div className="flex items-center justify-center gap-2 mt-1.5 flex-wrap">
-                <span className="text-xs font-semibold text-sky-400 bg-sky-950/60 border border-sky-800/50 rounded px-2 py-0.5">{mrCourse}</span>
-                {mrEvent && <span className="text-xs text-slate-300 bg-slate-800/60 rounded px-2 py-0.5">{mrEvent}</span>}
-                {mrGender && <span className={`text-xs font-bold rounded px-2 py-0.5 ${mrGender === '男' ? 'text-sky-300 bg-sky-950/60 border border-sky-800/50' : mrGender === '女' ? 'text-rose-300 bg-rose-950/60 border border-rose-800/50' : 'text-purple-300 bg-purple-950/60 border border-purple-800/50'}`}>{mrGender}</span>}
-                {mrAgeGroup && <span className="text-xs text-slate-300 bg-slate-800/60 rounded px-2 py-0.5">{ageGroupLabel(Number(mrAgeGroup))}</span>}
-                <span className="text-xs text-slate-500">{mrFiltered.length}件</span>
+                {([['records', '記録一覧'], ['ranking', '保持順位']] as const).map(([val, label]) => (
+                  <button key={val} type="button" onClick={() => setMrMainView(val)}
+                    className={`text-xs font-bold rounded px-2.5 py-0.5 transition-colors ${
+                      mrMainView === val
+                        ? 'bg-amber-700/80 text-amber-200'
+                        : 'bg-slate-700 text-slate-400 hover:bg-slate-600 hover:text-slate-200'
+                    }`}
+                  >{label}</button>
+                ))}
+                {mrMainView === 'records' && (
+                  <>
+                    {(['短水路', '長水路'] as const).map((val) => (
+                      <button key={val} type="button" onClick={() => setMrCourse(mrCourse === val ? '' : val)}
+                        className={`text-xs font-bold rounded px-2.5 py-0.5 transition-colors ${
+                          mrCourse === val
+                            ? 'bg-sky-600 text-white'
+                            : 'bg-slate-700 text-slate-400 hover:bg-slate-600 hover:text-slate-200'
+                        }`}
+                      >{val}</button>
+                    ))}
+                    <span className="text-slate-600">|</span>
+                  </>
+                )}
+                {mrMainView === 'records' && mrEvent && <span className="text-xs text-slate-300 bg-slate-800/60 rounded px-2 py-0.5">{mrEvent}</span>}
+                {mrMainView === 'records' && mrGender && <span className={`text-xs font-bold rounded px-2 py-0.5 ${mrGender === '男性' ? 'text-sky-300 bg-sky-950/60 border border-sky-800/50' : mrGender === '女性' ? 'text-rose-300 bg-rose-950/60 border border-rose-800/50' : 'text-purple-300 bg-purple-950/60 border border-purple-800/50'}`}>{mrGender}</span>}
+                {mrMainView === 'records' && mrAgeGroup && <span className="text-xs text-slate-300 bg-slate-800/60 rounded px-2 py-0.5">{ageGroupLabel(Number(mrAgeGroup))}</span>}
+                {mrMainView === 'records' && <span className="text-xs text-slate-500">{mrFiltered.length}件</span>}
+                {mrMainView === 'ranking' && <span className="text-xs text-slate-500">{mrAthleteRanking.length}名</span>}
               </div>
             </div>
 
@@ -3606,43 +3791,137 @@ export default function SearchApp({
                 読込中…
               </div>
             ) : mrRecords.length === 0 ? (
-              <p className="py-12 text-center text-sm text-slate-500">
-                {mrCourse}の大会新記録が登録されていません
-              </p>
+              <p className="py-12 text-center text-sm text-slate-500">大会新記録が登録されていません</p>
             ) : mrFiltered.length === 0 ? (
               <p className="py-12 text-center text-sm text-slate-500">条件に一致する記録がありません</p>
             ) : (
-              <div className={`flex gap-5 items-start ${mrHighlightName && mrAthleteRecords.length > 0 ? 'flex-col lg:flex-row' : ''}`}>
-                {/* 競技別テーブル */}
-                <div className={mrHighlightName && mrAthleteRecords.length > 0 ? 'flex-1 min-w-0 w-full' : 'w-full'}>
-                  {Array.from(mrGroupedByEvent.entries()).map(([eventKey, evRecords]) => {
-                    const sorted = [...evRecords].sort((a, b) => {
-                      const gOrder: Record<string, number> = { 女: 0, 男: 1, 混合: 2 }
-                      const gDiff = (gOrder[a.gender] ?? 3) - (gOrder[b.gender] ?? 3)
-                      return gDiff !== 0 ? gDiff : a.age_group - b.age_group
-                    })
+              <div>
+                {/* 保持順位ビュー */}
+                {mrMainView === 'ranking' ? (() => {
+                  const sortedRanking = [...mrAthleteRanking].sort((a, b) => {
+                    const { field, dir } = mrRankSort
+                    let cmp = 0
+                    if (field === 'rank' || field === 'total') cmp = b.total - a.total
+                    else if (field === 'name') cmp = a.name.localeCompare(b.name, 'ja')
+                    else if (field === 'gender') cmp = a.gender.localeCompare(b.gender, 'ja')
+                    else if (field === 'team') cmp = a.teamName.localeCompare(b.teamName, 'ja')
+                    else if (field === 'short') cmp = b.shortCount - a.shortCount
+                    else if (field === 'long') cmp = b.longCount - a.longCount
+                    return dir === 'asc' ? -cmp : cmp
+                  })
+                  const RankTh = ({ field, children, className }: { field: typeof mrRankSort.field; children: React.ReactNode; className?: string }) => {
+                    const active = mrRankSort.field === field
+                    return (
+                      <th
+                        className={`px-3 py-2 text-xs cursor-pointer select-none hover:text-white transition-colors whitespace-nowrap ${active ? 'text-amber-300' : 'text-slate-400'} ${className ?? ''}`}
+                        onClick={() => setMrRankSort(prev => prev.field === field ? { field, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { field, dir: field === 'total' || field === 'short' || field === 'long' ? 'desc' : 'asc' })}
+                      >
+                        {children}{active ? (mrRankSort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
+                      </th>
+                    )
+                  }
+                  return (
+                  <div className="overflow-x-auto rounded-xl border border-sky-900/40">
+                    <table className="w-full text-sm" style={{ minWidth: '500px' }}>
+                      <thead>
+                        <tr className="bg-gradient-to-r from-sky-950 to-indigo-950 border-b border-sky-800/40 text-left">
+                          <th className="px-3 py-2 text-xs text-white text-center w-8">#</th>
+                          <RankTh field="name">選手名</RankTh>
+                          <RankTh field="gender" className="text-center">性別</RankTh>
+                          <RankTh field="team">チーム</RankTh>
+                          <RankTh field="total" className="text-right">合計</RankTh>
+                          <RankTh field="short" className="text-right">短水路</RankTh>
+                          <RankTh field="long" className="text-right">長水路</RankTh>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sortedRanking.map((a, i) => (
+                          <tr key={a.name} className={`border-t border-slate-700/40 transition-colors ${mrHighlightName === a.name ? 'bg-amber-950/50 ring-1 ring-inset ring-amber-500/60' : i % 2 === 0 ? 'bg-sky-950/40' : 'bg-slate-900/40'}`}>
+                            <td className="px-3 py-2 text-center text-xs text-white tabular-nums">{i + 1}</td>
+                            <td className="px-3 py-2">
+                              <button
+                                type="button"
+                                onClick={() => setMrHighlightName(mrHighlightName === a.name ? '' : a.name)}
+                                className={`text-sm text-left hover:underline transition-colors ${mrHighlightName === a.name ? 'text-amber-200 font-bold' : 'text-sky-300 hover:text-sky-200'}`}
+                              >{a.name}</button>
+                            </td>
+                            <td className="px-3 py-2 text-center">
+                              <span className={`text-xs font-bold ${genderDisplay(a.gender) === '男性' ? 'text-sky-400' : genderDisplay(a.gender) === '女性' ? 'text-rose-400' : 'text-purple-400'}`}>
+                                {genderDisplay(a.gender)}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2 text-xs text-white whitespace-nowrap">{teamDisplayName(a.teamName)}</td>
+                            <td className="px-3 py-2 text-right font-bold text-amber-400 tabular-nums">{a.total}</td>
+                            <td className="px-3 py-2 text-right text-white tabular-nums">{a.shortCount > 0 ? a.shortCount : '－'}</td>
+                            <td className="px-3 py-2 text-right text-white tabular-nums">{a.longCount > 0 ? a.longCount : '－'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  )
+                })() : (
+                <>{/* 水路別セクション */}
+                {(['短水路', '長水路'] as const).map((course) => {
+                  const courseMap = course === '短水路' ? mrGroupedByEvent.short : mrGroupedByEvent.long
+                  if (courseMap.size === 0) return null
+                  const isCourseOpen = !mrClosedCourses.has(course)
+                  return (
+                  <div key={course} className="mb-10">
+                    {/* 水路ヘッダー（開閉ボタン） */}
+                    <div className="flex items-center gap-3 mb-5">
+                      <div className="h-px flex-1 bg-gradient-to-r from-transparent via-sky-700/60 to-transparent" />
+                      <button
+                        type="button"
+                        onClick={() => setMrClosedCourses(prev => { const n = new Set(prev); if (n.has(course)) n.delete(course); else n.add(course); return n })}
+                        className="px-4 py-1.5 rounded-full bg-gradient-to-r from-sky-900 to-indigo-900 border border-sky-600/50 text-sm font-black text-sky-200 whitespace-nowrap shadow-lg shadow-sky-950/40 hover:from-sky-800 hover:to-indigo-800 transition-colors"
+                      >
+                        <span className="mr-1 text-[10px] text-sky-400">{isCourseOpen ? '▼' : '▶'}</span>
+                        ⛊ {course}
+                        <span className="ml-2 text-[10px] font-normal text-slate-400">{[...courseMap.values()].flat().length}件</span>
+                      </button>
+                      <div className="h-px flex-1 bg-gradient-to-r from-transparent via-sky-700/60 to-transparent" />
+                    </div>
+                    {/* 競技別テーブル */}
+                    {isCourseOpen && <div className="w-full">
+                  {Array.from(courseMap.entries()).map(([eventKey, evRecords]) => {
+                    const sorted = evRecords
+                    const isOpen = !mrClosedEvents.has(`${course}:${eventKey}`)
                     return (
                       <div key={eventKey} className="mb-7">
                         {/* 競技名ヘッダー */}
                         <div className="flex items-center gap-2 mb-2">
                           <div className="h-px flex-1 bg-gradient-to-r from-transparent via-sky-800/50 to-transparent" />
-                          <span className="px-3 py-1 rounded-full bg-sky-950/80 border border-sky-700/60 text-sm font-bold text-sky-300 whitespace-nowrap">
+                          <button
+                            type="button"
+                            onClick={() => setMrClosedEvents((current) => {
+                              const next = new Set(current)
+                              const key = `${course}:${eventKey}`
+                              if (next.has(key)) next.delete(key)
+                              else next.add(key)
+                              return next
+                            })}
+                            className="px-3 py-1 rounded-full bg-sky-950/80 border border-sky-700/60 text-sm font-bold text-sky-300 whitespace-nowrap hover:bg-sky-900/80 transition-colors"
+                          >
+                            <span className="mr-1 text-[10px] text-sky-500">{isOpen ? '▼' : '▶'}</span>
                             {eventKey}
-                          </span>
+                            <span className="ml-2 text-[10px] text-slate-500">{sorted.length}</span>
+                          </button>
                           <div className="h-px flex-1 bg-gradient-to-r from-transparent via-sky-800/50 to-transparent" />
                         </div>
                         {/* テーブル */}
-                        <div className="overflow-x-auto rounded-xl border border-sky-900/40">
-                          <table className="w-full text-sm" style={{ minWidth: '520px' }}>
+                        {isOpen && <div className="overflow-x-auto rounded-xl border border-sky-900/40">
+                          <table className="w-full text-sm" style={{ minWidth: '580px' }}>
                             <thead>
                               <tr className="bg-gradient-to-r from-sky-950 to-indigo-950 border-b border-sky-800/40 text-left">
                                 <th className="px-2 py-2 font-semibold text-xs text-slate-500 text-center w-7">#</th>
-                                <th className="px-3 py-2 font-semibold text-xs text-slate-300 whitespace-nowrap">年齢区分</th>
-                                <th className="px-3 py-2 font-semibold text-xs text-slate-300 text-center w-8">性別</th>
-                                <th className="px-3 py-2 font-semibold text-xs text-slate-300">選手名</th>
-                                <th className="px-3 py-2 font-semibold text-xs text-slate-300">チーム</th>
-                                <th className="px-3 py-2 font-semibold text-xs text-amber-400 text-right whitespace-nowrap">大会新</th>
-                                <th className="px-3 py-2 font-semibold text-xs text-slate-300 text-right whitespace-nowrap">樹立日</th>
+                                <th className="px-2 py-2 font-semibold text-xs text-sky-400 whitespace-nowrap">水路</th>
+                                <SortTh field="age" current={mrSortField} dir={mrSortDir} onSort={handleMeetRecordSort}>年齢区分</SortTh>
+                                <SortTh field="gender" current={mrSortField} dir={mrSortDir} onSort={handleMeetRecordSort} className="text-center">性別</SortTh>
+                                <SortTh field="name" current={mrSortField} dir={mrSortDir} onSort={handleMeetRecordSort}>選手名</SortTh>
+                                <SortTh field="team" current={mrSortField} dir={mrSortDir} onSort={handleMeetRecordSort}>チーム</SortTh>
+                                <SortTh field="record" current={mrSortField} dir={mrSortDir} onSort={handleMeetRecordSort} className="text-right text-amber-400">大会新</SortTh>
+                                <SortTh field="date" current={mrSortField} dir={mrSortDir} onSort={handleMeetRecordSort} className="text-right">樹立日</SortTh>
                               </tr>
                             </thead>
                             <tbody>
@@ -3669,12 +3948,17 @@ export default function SearchApp({
                                     <td className="px-2 py-2 text-center text-xs text-slate-600 tabular-nums">
                                       {i + 1}
                                     </td>
+                                    <td className="px-2 py-2 text-xs whitespace-nowrap">
+                                      <span className={`font-bold ${r.course === '短水路' ? 'text-sky-400' : 'text-emerald-400'}`}>
+                                        {r.course === '短水路' ? '短' : '長'}
+                                      </span>
+                                    </td>
                                     <td className="px-3 py-2 text-xs text-slate-300 whitespace-nowrap">
                                       {ageGroupLabel(r.age_group)}
                                     </td>
                                     <td className="px-3 py-2 text-center">
-                                      <span className={`text-xs font-bold ${r.gender === '男' ? 'text-sky-400' : r.gender === '女' ? 'text-rose-400' : 'text-purple-400'}`}>
-                                        {r.gender}
+                                      <span className={`text-xs font-bold ${genderDisplay(r.gender) === '男性' ? 'text-sky-400' : genderDisplay(r.gender) === '女性' ? 'text-rose-400' : 'text-purple-400'}`}>
+                                        {genderDisplay(r.gender)}
                                       </span>
                                     </td>
                                     <td className="px-3 py-2">
@@ -3706,58 +3990,15 @@ export default function SearchApp({
                               })}
                             </tbody>
                           </table>
-                        </div>
+                        </div>}
                       </div>
                     )
                   })}
-                </div>
-
-                {/* 選手記録パネル（右エリア） */}
-                {mrHighlightName && mrAthleteRecords.length > 0 && (
-                  <div className="lg:w-72 w-full shrink-0 rounded-xl border border-amber-700/50 bg-amber-950/20 overflow-hidden lg:sticky lg:top-4">
-                    <div className="bg-gradient-to-r from-amber-950/80 to-slate-900/80 border-b border-amber-800/40 px-4 py-2.5 flex items-start justify-between gap-2">
-                      <div>
-                        <div className="text-[10px] font-bold text-amber-600 uppercase tracking-widest">ALL RECORDS</div>
-                        <div className="text-sm font-bold text-amber-200">{mrHighlightName}</div>
-                        <div className="text-[11px] text-amber-600 mt-0.5">{mrAthleteRecords.length}種目</div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setMrHighlightName('')}
-                        className="text-amber-600 hover:text-amber-400 text-sm font-bold mt-0.5 shrink-0"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                    <div className="overflow-y-auto max-h-[70vh]">
-                      <table className="w-full text-xs">
-                        <thead>
-                          <tr className="bg-slate-900/60 border-b border-amber-900/30 text-left">
-                            <th className="px-3 py-2 text-slate-400 font-semibold">競技</th>
-                            <th className="px-3 py-2 text-amber-500 font-semibold text-right whitespace-nowrap">大会新</th>
-                            <th className="px-3 py-2 text-slate-400 font-semibold text-right whitespace-nowrap">樹立日</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {mrAthleteRecords.map((r, i) => (
-                            <tr key={r.id} className={`border-t border-amber-900/20 ${i % 2 === 0 ? 'bg-amber-950/20' : ''}`}>
-                              <td className="px-3 py-2 text-slate-300 leading-tight">
-                                <div className="font-medium">{r.event}</div>
-                                <div className="text-slate-500">{r.distance} · {ageGroupLabel(r.age_group)}</div>
-                              </td>
-                              <td className="px-3 py-2 text-right font-mono font-bold text-amber-300 whitespace-nowrap">
-                                {r.record}
-                              </td>
-                              <td className="px-3 py-2 text-right text-slate-500 whitespace-nowrap">
-                                {r.established_date ?? '－'}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+                    </div>}
                   </div>
-                )}
+                  )
+                })}
+                </>)}
               </div>
             )}
           </div>
@@ -3767,8 +4008,8 @@ export default function SearchApp({
           <div className="max-w-5xl mx-auto">
             <div className="mb-5 flex gap-1.5 border-b border-slate-700">
               {([
+                ['offenders', '失格/棄権一覧', disqualifiedEntries.length],
                 ['rules', 'ルール一覧', disqualificationRules.length],
-                ['offenders', '失格者一覧', disqualifiedEntries.length],
               ] as const).map(([view, label, count]) => (
                 <button
                   key={view}
@@ -3831,51 +4072,131 @@ export default function SearchApp({
                   ))}
                 </div>
               )
-            ) : disqualifiedEntries.length === 0 ? (
-              <p className="py-12 text-center text-sm text-slate-500">条件に一致する失格者はいません</p>
+            ) : filteredAndSortedOffenders.length === 0 ? (
+              <p className="py-12 text-center text-sm text-slate-500">条件に一致する失格・棄権者はいません</p>
             ) : (
-              <div>
-                <p className="mb-2 text-xs leading-relaxed text-amber-300/80">
-                  現在の成績DBには失格コード専用列がないため、順位・記録が未登録の結果を表示しています。
-                </p>
-                <div className="overflow-x-auto rounded-xl border border-slate-700">
-                <table className="w-full min-w-[720px] text-sm">
-                  <thead>
-                    <tr className="bg-gradient-to-r from-sky-950 to-indigo-950 text-left text-xs text-slate-300">
-                      <th className="px-3 py-2.5 font-semibold">大会</th>
-                      <th className="px-3 py-2.5 font-semibold">区分</th>
-                      <th className="px-3 py-2.5 font-semibold">氏名／チーム</th>
-                      <th className="px-3 py-2.5 font-semibold">性別</th>
-                      <th className="px-3 py-2.5 font-semibold">チーム</th>
-                      <th className="px-3 py-2.5 font-semibold">競技名</th>
-                      <th className="px-3 py-2.5 font-semibold">年齢区分</th>
-                      <th className="px-3 py-2.5 font-semibold">レーン</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {disqualifiedEntries.map((entry, index) => (
-                      <tr
-                        key={entry.id}
-                        className={`border-t border-slate-700/50 ${
-                          index % 2 === 0 ? 'bg-slate-800/60' : 'bg-slate-900/60'
-                        }`}
-                      >
-                        <td className="whitespace-nowrap px-3 py-2 text-slate-300">第{entry.meet.round}回</td>
-                        <td className="whitespace-nowrap px-3 py-2 text-indigo-300">{entry.type}</td>
-                        <td className="whitespace-nowrap px-3 py-2 font-medium text-white">{entry.name}</td>
-                        <td className={`whitespace-nowrap px-3 py-2 ${entry.gender === '男子' ? 'text-sky-300' : entry.gender === '女子' ? 'text-rose-300' : 'text-purple-300'}`}>
-                          {entry.gender}
-                        </td>
-                        <td className="whitespace-nowrap px-3 py-2 text-slate-300">{teamDisplayName(entry.team)}</td>
-                        <td className="whitespace-nowrap px-3 py-2 text-slate-200">{entry.event}</td>
-                        <td className="whitespace-nowrap px-3 py-2 text-slate-300">{entry.ageGroup || '－'}</td>
-                        <td className="whitespace-nowrap px-3 py-2 text-slate-400">{entry.lane || '－'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                </div>
-              </div>
+              (() => {
+                const dqCodeMap = new Map(disqualificationRules.map((r) => [r.code, r.description]))
+                const SortTh = ({ label }: { label: string }) => {
+                  const isActive = dqSortKey === label
+                  return (
+                    <th
+                      className={`px-3 py-2.5 font-semibold cursor-pointer select-none whitespace-nowrap transition-colors hover:text-white ${isActive ? 'text-sky-300' : ''}`}
+                      onClick={() => handleDqSort(label)}
+                    >
+                      {label}
+                      {isActive && <span className="ml-1 text-[10px]">{dqSortDir === 'asc' ? '▲' : '▼'}</span>}
+                    </th>
+                  )
+                }
+                return (
+                  <div className="overflow-x-auto rounded-xl border border-slate-700">
+                    <table className="w-full min-w-[860px] text-sm">
+                      <thead>
+                        <tr className="bg-gradient-to-r from-sky-950 to-indigo-950 text-left text-xs text-slate-300">
+                          <SortTh label="大会" />
+                          <SortTh label="区分" />
+                          <SortTh label="選手名" />
+                          <SortTh label="性別" />
+                          <SortTh label="チーム" />
+                          <SortTh label="競技名" />
+                          <SortTh label="年齢区分" />
+                          <SortTh label="失格区分" />
+                          <SortTh label="失格コード" />
+                          <th className="px-3 py-2.5 font-semibold">理由</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredAndSortedOffenders.map((entry, index) => {
+                          const isDQ = entry.disqualificationCode !== null
+                          const isWD = entry.isWithdrawal
+                          const statusLabel  = isDQ ? '失格' : isWD ? '棄権' : '－'
+                          const statusColor  = isDQ ? 'text-red-400 font-semibold' : isWD ? 'text-slate-400' : 'text-slate-500'
+                          const dqDesc = entry.disqualificationCode
+                            ? (dqCodeMap.get(entry.disqualificationCode) ?? '')
+                            : ''
+                          const canShowHistory = entry.type === '個人' && entry.playerId != null
+                          return (
+                            <tr
+                              key={entry.id}
+                              className={`border-t border-slate-700/50 ${
+                                index % 2 === 0 ? 'bg-slate-800/60' : 'bg-slate-900/60'
+                              }`}
+                            >
+                              <td
+                                className="whitespace-nowrap px-3 py-2 text-slate-300 cursor-pointer hover:text-sky-300 hover:underline"
+                                title="クリックで大会フィルター"
+                                onClick={() => setMeetId(entry.meet.id)}
+                              >第{entry.meet.round}回</td>
+                              <td
+                                className="whitespace-nowrap px-3 py-2 text-indigo-300 cursor-pointer hover:text-indigo-100 hover:underline"
+                                title="クリックで区分フィルター"
+                                onClick={() => setDqTypeFilter(entry.type === '個人' ? 'individual' : 'relay')}
+                              >
+                                {entry.type}
+                              </td>
+                              <td
+                                className={`px-3 py-2 font-medium ${canShowHistory ? 'text-sky-200 cursor-pointer hover:underline hover:text-sky-100 whitespace-nowrap' : 'text-white'}`}
+                                title={canShowHistory ? `${entry.name}の過去レース記録を表示` : undefined}
+                                onClick={() => {
+                                  if (canShowHistory) {
+                                    setHistoryDisqualification({
+                                      code: entry.disqualificationCode,
+                                      isWithdrawal: entry.isWithdrawal,
+                                    })
+                                    fetchAthleteHistory(entry.playerId!, entry.name, entry.gender, entry.team)
+                                    setMobileDrawerOpen(true)
+                                  }
+                                }}
+                              >
+                                {entry.type === 'リレー' && entry.members && entry.members.length > 0 ? (
+                                  <div className="text-xs leading-relaxed">
+                                    {entry.members.map((member, i) => (
+                                      <button
+                                        key={member.id}
+                                        type="button"
+                                        className="block whitespace-nowrap text-sky-200 hover:text-sky-100 hover:underline"
+                                        title={`${member.name}の過去レース記録を表示`}
+                                        onClick={() => {
+                                          setHistoryDisqualification({
+                                            code: entry.disqualificationCode,
+                                            isWithdrawal: entry.isWithdrawal,
+                                          })
+                                          fetchAthleteHistory(member.id, member.name, member.gender, entry.team)
+                                          setMobileDrawerOpen(true)
+                                        }}
+                                      >
+                                        {i + 1}. {member.name}
+                                      </button>
+                                    ))}
+                                  </div>
+                                ) : entry.name}
+                              </td>
+                              <td className={`whitespace-nowrap px-3 py-2 ${entry.gender === '男子' ? 'text-sky-300' : entry.gender === '女子' ? 'text-rose-300' : 'text-purple-300'}`}>
+                                {entry.gender}
+                              </td>
+                              <td
+                                className="whitespace-nowrap px-3 py-2 text-slate-300 cursor-pointer hover:text-sky-300 hover:underline"
+                                title="クリックでチームフィルター"
+                                onClick={() => setTeamKey(normalizeOptionName(entry.team))}
+                              >
+                                {teamDisplayName(entry.team)}
+                              </td>
+                              <td className="whitespace-nowrap px-3 py-2 text-slate-200">{entry.event}</td>
+                              <td className="whitespace-nowrap px-3 py-2 text-slate-300">{entry.ageGroup || '－'}</td>
+                              <td className={`whitespace-nowrap px-3 py-2 ${statusColor}`}>{statusLabel}</td>
+                              <td className="whitespace-nowrap px-3 py-2 font-mono text-amber-300">
+                                {entry.disqualificationCode ?? ''}
+                              </td>
+                              <td className="px-3 py-2 text-slate-400 text-xs leading-snug">{dqDesc}</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )
+              })()
             )}
           </div>
         )}
@@ -4181,6 +4502,86 @@ export default function SearchApp({
     </div>
   )
 
+  const meetRecordSidePanel = (
+    <div className="p-3">
+      {!mrSelectedAthlete ? (
+        <div className="rounded-xl border border-amber-900/40 bg-amber-950/10 p-4 text-xs">
+          <div className="text-[10px] font-bold uppercase tracking-widest text-amber-600">ALL RECORDS</div>
+          <p className="mt-2 leading-relaxed text-slate-400">
+            選手名をクリックすると、この大会新一覧内の保持記録を表示します。
+          </p>
+        </div>
+      ) : (
+        <div className="rounded-xl border border-amber-700/50 bg-amber-950/20 overflow-hidden">
+          <div className="bg-gradient-to-r from-amber-950/80 to-slate-900/80 border-b border-amber-800/40 px-4 py-3">
+            <div>
+              <div className="text-[10px] font-bold text-amber-600 uppercase tracking-widest">ALL RECORDS</div>
+              <div className="mt-1 text-base font-bold text-white">{mrSelectedAthlete.name}</div>
+            </div>
+            <div className="mt-1.5 flex items-center gap-1.5 text-xs">
+              <span className={`font-bold ${mrSelectedAthlete.gender === '男性' ? 'text-sky-400' : mrSelectedAthlete.gender === '女性' ? 'text-rose-400' : 'text-purple-400'}`}>
+                {mrSelectedAthlete.gender}
+              </span>
+              {mrSelectedAthlete.teamName && (
+                <>
+                  <span className="text-slate-600">/</span>
+                  <span className="text-white">{teamDisplayName(mrSelectedAthlete.teamName)}</span>
+                </>
+              )}
+            </div>
+            <div className="mt-2 inline-flex rounded border border-amber-900/40 bg-slate-950/30 px-2 py-1 text-[11px]">
+              <span className="text-amber-600">新記録保持数</span>
+              <span className="ml-2 font-bold text-amber-300">{mrSelectedAthlete.count}件</span>
+            </div>
+          </div>
+          <div className="max-h-[calc(100vh-260px)] overflow-y-auto">
+            {(['短水路', '長水路'] as const).map((panelCourse) => {
+              const panelRecs = mrAthleteRecords.filter(r => r.course === panelCourse)
+              if (panelRecs.length === 0) return null
+              const panelKey = `panel:${panelCourse}`
+              const isPanelOpen = !mrClosedCourses.has(panelKey)
+              return (
+                <div key={panelCourse}>
+                  <button
+                    type="button"
+                    onClick={() => setMrClosedCourses(prev => { const n = new Set(prev); if (n.has(panelKey)) n.delete(panelKey); else n.add(panelKey); return n })}
+                    className="w-full flex items-center gap-2 px-3 py-2 bg-sky-950/60 border-b border-sky-900/40 text-xs font-bold text-sky-300 hover:bg-sky-900/40 transition-colors"
+                  >
+                    <span className="text-[10px]">{isPanelOpen ? '▼' : '▶'}</span>
+                    ⛊ {panelCourse}
+                    <span className="text-[10px] text-slate-400 ml-auto">{panelRecs.length}件</span>
+                  </button>
+                  {isPanelOpen && (
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="bg-slate-900/60 border-b border-amber-900/30 text-left">
+                          <th className="px-3 py-1.5 text-slate-400 font-semibold">競技</th>
+                          <th className="px-2 py-1.5 text-slate-400 font-semibold whitespace-nowrap">年齢</th>
+                          <th className="px-2 py-1.5 text-amber-500 font-semibold text-right whitespace-nowrap">大会新</th>
+                          <th className="px-2 py-1.5 text-slate-400 font-semibold text-right whitespace-nowrap">樹立日</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {panelRecs.map((r, i) => (
+                          <tr key={r.id} className={`border-t border-amber-900/20 ${i % 2 === 0 ? 'bg-amber-950/20' : ''}`}>
+                            <td className="px-3 py-2 font-medium text-white leading-tight whitespace-nowrap">{r.event} {r.distance}</td>
+                            <td className="px-2 py-2 text-white whitespace-nowrap">{ageGroupLabel(r.age_group)}</td>
+                            <td className="px-2 py-2 text-right font-mono font-bold text-amber-300 whitespace-nowrap">{r.record}</td>
+                            <td className="px-2 py-2 text-right text-white whitespace-nowrap">{r.established_date ?? '－'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+
   // ── Layout ────────────────────────────────────────────────────
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -4192,15 +4593,29 @@ export default function SearchApp({
         >
           検索
         </button>
-        <span className="truncate text-center text-xs font-bold tracking-wide bg-gradient-to-r from-sky-400 via-cyan-300 to-blue-400 bg-clip-text text-transparent">
-          セントラルマスターズ
-        </span>
+        {activeTab === 'meet-records' ? (
+          <div className="flex gap-1 justify-center">
+            {([['', '両方'], ['短水路', '短水路'], ['長水路', '長水路']] as const).map(([val, label]) => (
+              <button key={val} type="button" onClick={() => setMrCourse(val)}
+                className={`flex-1 py-1.5 rounded text-xs font-bold transition-colors ${
+                  mrCourse === val
+                    ? 'bg-sky-600 text-white'
+                    : 'bg-slate-700 text-slate-400'
+                }`}
+              >{label}</button>
+            ))}
+          </div>
+        ) : (
+          <span className="truncate text-center text-xs font-bold tracking-wide bg-gradient-to-r from-sky-400 via-cyan-300 to-blue-400 bg-clip-text text-transparent">
+            セントラルマスターズ
+          </span>
+        )}
         <button
           type="button"
           onClick={() => setMobileDrawerOpen(true)}
           className="min-w-[78px] rounded-lg border border-indigo-700/70 bg-indigo-950/70 px-2.5 py-2 text-xs font-bold text-indigo-200 transition-colors hover:bg-indigo-900/80"
         >
-          レース記録
+          {activeTab === 'meet-records' ? '大会新一覧' : 'レース記録'}
         </button>
       </div>
       {/* Full-width tab bar — visually extends the site header */}
@@ -4243,36 +4658,19 @@ export default function SearchApp({
           style={{ width: rightW }}
         >
           <div className="px-4 py-2.5 border-b border-slate-700/80 shrink-0 flex items-center justify-between">
-            <span className="text-xs font-bold text-white tracking-wide">
-              過去レース記録
-            </span>
-            {athleteForHistory && (
-              <button
-                onClick={() => {
-                  setAthleteForHistory(null)
-                  setAthleteHistory(null)
-                  if (activeTab === 'athlete') setActiveTab('results')
-                  updateUrl({ tab: activeTab === 'athlete' ? 'results' : activeTab, athleteId: null })
-                }}
-                className="ml-2 text-slate-600 hover:text-slate-400 shrink-0 leading-none"
-                aria-label="閉じる"
-              >
-                ✕
-              </button>
+            {activeTab === 'meet-records' ? (
+              <span className="text-xs font-black tracking-wide bg-gradient-to-r from-amber-400 via-yellow-100 to-amber-400 bg-clip-text text-transparent drop-shadow-[0_0_8px_rgba(251,191,36,0.6)]">
+                大会新一覧
+              </span>
+            ) : (
+              <span className="text-xs font-bold text-white tracking-wide">過去レース記録</span>
             )}
           </div>
           <div className="overflow-y-auto flex-1">
-            {!athleteForHistory ? (
+            {activeTab === 'meet-records' ? meetRecordSidePanel : !athleteForHistory ? (
               <div className="p-4 text-xs text-slate-600">
                 <p className="mt-1 leading-relaxed">選手名をクリックすると<br />全大会の記録が表示されます</p>
               </div>
-            ) : historyLoading ? (
-              <div className="flex items-center justify-center gap-2 py-10 text-slate-500 text-xs">
-                <span className="w-3 h-3 border-2 border-sky-500 border-t-transparent rounded-full animate-spin" />
-                読込中…
-              </div>
-            ) : !athleteHistory || athleteHistory.length === 0 ? (
-              <div className="p-4 text-xs text-slate-500">記録が見つかりません</div>
             ) : (
               <div className="p-3 flex flex-col gap-5">
                 {/* 選手名・チーム名ヘッダー */}
@@ -4294,7 +4692,14 @@ export default function SearchApp({
                     詳しく見る →
                   </button>
                 </div>
-                {athleteHistory.map((meet) => {
+                {historyLoading ? (
+                  <div className="flex items-center justify-center gap-2 py-10 text-slate-500 text-xs">
+                    <span className="w-3 h-3 border-2 border-sky-500 border-t-transparent rounded-full animate-spin" />
+                    読込中…
+                  </div>
+                ) : !athleteHistory || athleteHistory.length === 0 ? (
+                  <div className="py-4 text-xs text-slate-500">記録が見つかりません</div>
+                ) : athleteHistory.map((meet) => {
                   const indPts = meet.individual.reduce((s, r) => s + (r.points ?? 0), 0)
                   const relPts = meet.relay.reduce((s, r) => s + (r.team_points ?? 0) / 4, 0)
                   const totalPts = indPts + relPts
@@ -4319,8 +4724,13 @@ export default function SearchApp({
                               <td className="py-1 pr-1 text-slate-100 group-hover:text-amber-200 transition-colors">{r.event}</td>
                               <td className="py-1 pr-2 text-white whitespace-nowrap">{r.age_group}</td>
                               <td className="py-1 pr-2 font-mono text-white whitespace-nowrap">
-                                {r.time_display ?? '－'}
-                                {r.is_meet_record && <span className="ml-1 text-amber-400">★</span>}
+                                {r.time_display != null ? (
+                                  <>{r.time_display}{r.is_meet_record && <span className="ml-1 text-amber-400">★</span>}</>
+                                ) : r.disqualification_code != null ? (
+                                  <span className="text-red-400 font-semibold text-xs">失格 {r.disqualification_code}</span>
+                                ) : r.is_withdrawal ? (
+                                  <span className="text-slate-400 text-xs">棄権</span>
+                                ) : '－'}
                               </td>
                               <td className="py-1 text-right whitespace-nowrap">
                                 {r.rank === 1 ? (
@@ -4353,7 +4763,14 @@ export default function SearchApp({
                             >
                               <td className="py-1 pr-1 text-indigo-300 group-hover:text-amber-200 transition-colors">R {r.event}</td>
                               <td className="py-1 pr-2 text-white whitespace-nowrap">{r.age_group ?? ''}</td>
-                              <td className="py-1 pr-2 font-mono text-white whitespace-nowrap">{r.time_display ?? '－'}</td>
+                              <td className="py-1 pr-2 font-mono text-white whitespace-nowrap">
+                                {r.time_display != null ? r.time_display
+                                  : r.disqualification_code != null ? (
+                                    <span className="text-red-400 font-semibold text-xs">失格 {r.disqualification_code}</span>
+                                  ) : r.is_withdrawal ? (
+                                    <span className="text-slate-400 text-xs">棄権</span>
+                                  ) : '－'}
+                              </td>
                               <td className="py-1 text-right whitespace-nowrap">
                                 {r.rank === 1 ? (
                                   <span className="inline-flex items-center gap-0.5 justify-end">
@@ -4433,7 +4850,11 @@ export default function SearchApp({
         <div className={`absolute right-0 top-0 h-full w-[88vw] max-w-sm bg-slate-900 border-l border-slate-700 flex flex-col transition-transform duration-300 ease-out ${mobileDrawerOpen ? 'translate-x-0' : 'translate-x-full'}`}>
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700 shrink-0 bg-slate-800">
-            <span className="text-sm font-bold text-white">過去レース記録</span>
+            {activeTab === 'meet-records' ? (
+              <span className="text-sm font-black bg-gradient-to-r from-amber-400 via-yellow-100 to-amber-400 bg-clip-text text-transparent drop-shadow-[0_0_8px_rgba(251,191,36,0.6)]">大会新一覧</span>
+            ) : (
+              <span className="text-sm font-bold text-white">過去レース記録</span>
+            )}
             <button
               onClick={() => setMobileDrawerOpen(false)}
               className="flex items-center gap-1 text-xs font-semibold text-sky-400 hover:text-sky-300 transition-colors"
@@ -4444,12 +4865,7 @@ export default function SearchApp({
           </div>
           {/* Content */}
           <div className="overflow-y-auto flex-1">
-            {historyLoading ? (
-              <div className="flex items-center justify-center gap-2 py-16 text-slate-500 text-sm">
-                <span className="w-4 h-4 border-2 border-sky-500 border-t-transparent rounded-full animate-spin" />
-                読込中…
-              </div>
-            ) : !athleteHistory || !athleteForHistory ? (
+            {activeTab === 'meet-records' ? meetRecordSidePanel : !athleteForHistory ? (
               <div className="p-5 text-sm text-slate-500">記録が見つかりません</div>
             ) : (
               <div className="p-4 flex flex-col gap-5">
@@ -4471,7 +4887,14 @@ export default function SearchApp({
                     詳しく見る →
                   </button>
                 </div>
-                {athleteHistory.map((meet) => {
+                {historyLoading ? (
+                  <div className="flex items-center justify-center gap-2 py-16 text-slate-500 text-sm">
+                    <span className="w-4 h-4 border-2 border-sky-500 border-t-transparent rounded-full animate-spin" />
+                    読込中…
+                  </div>
+                ) : !athleteHistory || athleteHistory.length === 0 ? (
+                  <div className="py-5 text-sm text-slate-500">記録が見つかりません</div>
+                ) : athleteHistory.map((meet) => {
                   const indPts = meet.individual.reduce((s, r) => s + (r.points ?? 0), 0)
                   const relPts = meet.relay.reduce((s, r) => s + (r.team_points ?? 0) / 4, 0)
                   const totalPts = indPts + relPts
@@ -4496,8 +4919,13 @@ export default function SearchApp({
                               <td className="py-1.5 pr-1 text-slate-100">{r.event}</td>
                               <td className="py-1.5 pr-2 text-slate-300 whitespace-nowrap">{r.age_group}</td>
                               <td className="py-1.5 pr-2 font-mono text-white whitespace-nowrap">
-                                {r.time_display ?? '－'}
-                                {r.is_meet_record && <span className="ml-1 text-amber-400">★</span>}
+                                {r.time_display != null ? (
+                                  <>{r.time_display}{r.is_meet_record && <span className="ml-1 text-amber-400">★</span>}</>
+                                ) : r.disqualification_code != null ? (
+                                  <span className="text-red-400 font-semibold text-xs">失格 {r.disqualification_code}</span>
+                                ) : r.is_withdrawal ? (
+                                  <span className="text-slate-400 text-xs">棄権</span>
+                                ) : '－'}
                               </td>
                               <td className="py-1.5 text-right text-white whitespace-nowrap font-medium">
                                 {r.rank != null ? `${r.rank}位` : ''}
@@ -4516,7 +4944,14 @@ export default function SearchApp({
                             >
                               <td className="py-1.5 pr-1 text-indigo-300">R {r.event}</td>
                               <td className="py-1.5 pr-2 text-slate-300 whitespace-nowrap">{r.age_group ?? ''}</td>
-                              <td className="py-1.5 pr-2 font-mono text-white whitespace-nowrap">{r.time_display ?? '－'}</td>
+                              <td className="py-1.5 pr-2 font-mono text-white whitespace-nowrap">
+                                {r.time_display != null ? r.time_display
+                                  : r.disqualification_code != null ? (
+                                    <span className="text-red-400 font-semibold text-xs">失格 {r.disqualification_code}</span>
+                                  ) : r.is_withdrawal ? (
+                                    <span className="text-slate-400 text-xs">棄権</span>
+                                  ) : '－'}
+                              </td>
                               <td className="py-1.5 text-right text-white whitespace-nowrap font-medium">
                                 {r.rank != null ? `${r.rank}位` : ''}
                               </td>

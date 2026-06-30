@@ -84,7 +84,7 @@ function pickUnique(candidates) {
 
 async function main() {
   const { data, error } = await supabase
-    .from('mst_record_tournament')
+    .from('mst_record_tournament_short')
     .select('id, name_team_raw, athlete_name, team_name')
     .eq('is_relay', true)
     .order('id')
@@ -151,7 +151,7 @@ async function main() {
 
   for (const row of updates) {
     const { error: updateError } = await supabase
-      .from('mst_record_tournament')
+      .from('mst_record_tournament_short')
       .update({
         team_name: row.team_name,
         athlete_name: row.athlete_name,

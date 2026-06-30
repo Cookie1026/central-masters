@@ -1,0 +1,3 @@
+抽出件数: 499
+event/distance 未確定: 1件
+  age=160 ev='フリーリレー' dist='' relay=1 金子・天笠 今井・吉田（徹）

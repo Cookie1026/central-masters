@@ -20,7 +20,7 @@ export async function GET(request: Request) {
     .select(`
       id, rank, time_display, time_seconds, team_points, age_group_label, is_meet_record, meet_record_seconds,
       mst_team!inner(name),
-      mst_category!inner(name, gender),
+      mst_category!inner(name, gender, stroke),
       mst_event!inner(round, pool_type),
       mst_age(name),
       dt_player_relay(swim_order, split_seconds, dive_time, player_id, is_meet_record, is_japan_record, is_world_record, dt_player_person(name, gender))
@@ -59,6 +59,10 @@ export async function GET(request: Request) {
   if (categoryIdsParam) {
     const categoryIds = categoryIdsParam.split(',').map((id) => parseInt(id)).filter((id) => Number.isFinite(id))
     if (categoryIds.length > 0) query = query.in('category_id', categoryIds)
+    // The UI groups the same relay name across genders, so categoryIds can
+    // contain both the men's and women's category IDs. Keep the selected
+    // gender constraint even when explicit category IDs were supplied.
+    if (gender) query = query.eq('mst_category.gender', gender)
   } else if (gender) {
     const { data: cats } = await supabaseServer
       .from('mst_category')
@@ -71,7 +75,14 @@ export async function GET(request: Request) {
   }
 
   if (ageGroupLabelParam) {
-    query = query.eq('age_group_label', ageGroupLabelParam)
+    // Older short-course imports use U+301C (〜), while the current UI uses
+    // U+FF5E (～). Accept both so valid relay rows are not hidden.
+    const ageGroupLabels = [
+      ageGroupLabelParam,
+      ageGroupLabelParam.replaceAll('～', '〜'),
+      ageGroupLabelParam.replaceAll('〜', '～'),
+    ]
+    query = query.in('age_group_label', [...new Set(ageGroupLabels)])
   }
   if (rank) query = query.eq('rank', parseInt(rank))
 
@@ -91,12 +102,27 @@ export async function GET(request: Request) {
   const { data, error } = await query
   if (error) return NextResponse.json({ results: [], error: error.message })
 
-  const results = (data ?? []).map((r) => ({
-    ...r,
-    dt_player_relay: [...(r.dt_player_relay ?? [])].sort(
-      (a, b) => (a.swim_order ?? 0) - (b.swim_order ?? 0),
-    ),
-  }))
+  const { data: relayMaster } = await supabaseServer
+    .from('mst_medley_relay')
+    .select('relay_stroke, swim_order, stroke')
+
+  const strokeByRelayOrder = new Map(
+    (relayMaster ?? []).map((row) => [`${row.relay_stroke}:${row.swim_order}`, row.stroke]),
+  )
+
+  const results = (data ?? []).map((r) => {
+    const category = Array.isArray(r.mst_category) ? r.mst_category[0] : r.mst_category
+    return {
+      ...r,
+      dt_player_relay: [...(r.dt_player_relay ?? [])]
+        .sort((a, b) => (a.swim_order ?? 0) - (b.swim_order ?? 0))
+        .map((member) => ({
+          ...member,
+          stroke: strokeByRelayOrder.get(`${category?.stroke}:${member.swim_order}`)
+            ?? (category?.stroke?.includes('フリーリレー') ? '自由形' : null),
+        })),
+    }
+  })
 
   return NextResponse.json({ results })
 }

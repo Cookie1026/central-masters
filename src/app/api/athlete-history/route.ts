@@ -14,6 +14,8 @@ type MeetEntry = {
     rank: number | null
     points: number | null
     is_meet_record: boolean
+    disqualification_code: string | null
+    is_withdrawal: boolean
   }[]
   relay: {
     event: string
@@ -22,6 +24,8 @@ type MeetEntry = {
     rank: number | null
     team_points: number | null
     is_meet_record: boolean
+    disqualification_code: string | null
+    is_withdrawal: boolean
   }[]
 }
 
@@ -42,7 +46,7 @@ export async function GET(request: Request) {
     supabaseServer
       .from('dt_result_person')
       .select(
-        'rank, time_display, time_seconds, meet_record_seconds, points, is_meet_record, mst_event!inner(round, pool_type, date), mst_category!inner(name), mst_age!inner(name)',
+        'rank, time_display, time_seconds, meet_record_seconds, points, is_meet_record, disqualification_code, is_withdrawal, mst_event!inner(round, pool_type, date), mst_category!inner(name), mst_age!inner(name)',
       )
       .eq('player_id', aid),
     supabaseServer.from('dt_player_relay').select('relay_result_id').eq('player_id', aid),
@@ -54,7 +58,7 @@ export async function GET(request: Request) {
     const { data } = await supabaseServer
       .from('dt_result_relay')
       .select(
-        'rank, time_display, team_points, is_meet_record, age_group_label, mst_event!inner(round, pool_type, date), mst_category!inner(name), mst_age(name)',
+        'rank, time_display, team_points, is_meet_record, disqualification_code, is_withdrawal, age_group_label, mst_event!inner(round, pool_type, date), mst_category!inner(name), mst_age(name)',
       )
       .in('id', relayIds)
     relayData = (data ?? []) as Record<string, unknown>[]
@@ -79,6 +83,8 @@ export async function GET(request: Request) {
       rank: r.rank,
       points: r.points !== null && r.points !== undefined ? parseFloat(String(r.points)) : null,
       is_meet_record: r.is_meet_record,
+      disqualification_code: (r.disqualification_code as string | null) ?? null,
+      is_withdrawal: Boolean(r.is_withdrawal),
     })
   }
 
@@ -93,6 +99,8 @@ export async function GET(request: Request) {
       team_points:
         r['team_points'] != null ? parseFloat(String(r['team_points'])) : null,
       is_meet_record: Boolean(r['is_meet_record']),
+      disqualification_code: (r['disqualification_code'] as string | null) ?? null,
+      is_withdrawal: Boolean(r['is_withdrawal']),
     })
   }
 

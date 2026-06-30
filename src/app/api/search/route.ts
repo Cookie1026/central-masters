@@ -14,32 +14,21 @@ export async function GET(request: Request) {
   const rank = searchParams.get('rank')
   const recordType = searchParams.get('recordType')
 
-  // Resolve athlete IDs from team/gender if not a specific athlete
-  let athleteIds: number[] | null = null
-
-  if (athleteId) {
-    athleteIds = [parseInt(athleteId)]
-  } else if (team || teamIdsParam || gender) {
-    let q = supabaseServer.from('dt_player_person').select('id')
-    const teamIds = (teamIdsParam ?? '')
-      .split(',')
-      .map((id) => parseInt(id))
-      .filter((id) => Number.isFinite(id))
-    if (teamIds.length > 0) {
-      q = q.in('team_id', teamIds)
-    } else if (team) {
-      const { data: td } = await supabaseServer
-        .from('mst_team')
-        .select('id')
-        .eq('name', team)
-        .single()
-      if (!td) return NextResponse.json({ results: [] })
-      q = q.eq('team_id', td.id)
-    }
-    if (gender) q = q.eq('gender', gender)
-    const { data } = await q
-    athleteIds = data?.map((a) => a.id) ?? []
-    if (athleteIds.length === 0) return NextResponse.json({ results: [] })
+  // Filter through the joined athlete row instead of resolving athlete IDs
+  // first. The preliminary select was capped at 1,000 rows by PostgREST,
+  // which silently removed valid competitors from gender-wide rankings.
+  const teamIds = (teamIdsParam ?? '')
+    .split(',')
+    .map((id) => parseInt(id))
+    .filter((id) => Number.isFinite(id))
+  if (teamIds.length === 0 && team) {
+    const { data: td } = await supabaseServer
+      .from('mst_team')
+      .select('id')
+      .eq('name', team)
+      .single()
+    if (!td) return NextResponse.json({ results: [] })
+    teamIds.push(td.id)
   }
 
   let query = supabaseServer
@@ -56,7 +45,9 @@ export async function GET(request: Request) {
     .limit(2000)
 
   if (eventId) query = query.eq('event_id', parseInt(eventId))
-  if (athleteIds !== null) query = query.in('player_id', athleteIds)
+  if (athleteId) query = query.eq('player_id', parseInt(athleteId))
+  if (teamIds.length > 0) query = query.in('dt_player_person.team_id', teamIds)
+  if (gender) query = query.eq('dt_player_person.gender', gender)
   const categoryIds = (categoryIdsParam ?? '')
     .split(',')
     .map((id) => parseInt(id))

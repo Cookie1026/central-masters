@@ -54,3 +54,4 @@ npm run lint     # ESLintチェック
 ## Claude Codeスラッシュコマンド
 - `/1-png2txt` — PDFをPNG変換後に文字起こし
 - `/2-txt2total` — 文字起こしTXTから総合成績CSVを生成
+- `/3-update-meet-records` — 大会新記録一覧表をプログラムPDFから更新（毎大会）
