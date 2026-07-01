@@ -1058,7 +1058,6 @@ export default function SearchApp({
   const [athleteStats, setAthleteStats] = useState<AthleteEventStat[] | null>(null)
   const [teamRanking, setTeamRanking] = useState<TeamMemberRanking[] | null>(null)
   const [teamRankingName, setTeamRankingName] = useState('')
-  const [showShareCard, setShowShareCard] = useState(false)
   const shareCanvasRef = useRef<HTMLCanvasElement>(null)
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyDisqualification, setHistoryDisqualification] = useState<{
@@ -1506,7 +1505,6 @@ export default function SearchApp({
       setAthleteStats(null)
       setTeamRanking(null)
       setTeamRankingName('')
-      setShowShareCard(false)
       return
     }
     const controller = new AbortController()
@@ -1516,7 +1514,6 @@ export default function SearchApp({
     setAthleteStats(null)
     setTeamRanking(null)
     setTeamRankingName('')
-    setShowShareCard(false)
     fetch(`/api/athlete-rivals?athleteId=${athleteForHistory.id}`, { signal: controller.signal })
       .then((response) => response.json())
       .then((data: { rivals?: RivalCandidate[] }) => setRivalCandidates(data.rivals ?? []))
@@ -3778,21 +3775,13 @@ export default function SearchApp({
               )}
 
               {/* SNSシェアカードボタン + モーダル */}
-              <div className="mb-6 flex justify-center">
-                <button
-                  type="button"
-                  onClick={() => setShowShareCard(true)}
-                  className="flex items-center gap-2 rounded-xl border border-indigo-600/50 bg-indigo-950/40 px-5 py-2.5 text-sm font-bold text-indigo-300 hover:bg-indigo-900/60 transition-colors"
-                >
-                  📱 キャリアカードをシェアする
-                </button>
-              </div>
-
-              {showShareCard && athleteForHistory && (() => {
+              {/* キャリアカード（常時表示） */}
+              {athleteForHistory && (() => {
                 const avgDev = athleteStats && athleteStats.length > 0
                   ? Math.round(athleteStats.reduce((s, e) => s + e.deviation, 0) / athleteStats.length * 10) / 10
                   : null
                 const grade = avgDev == null ? null : avgDev >= 65 ? 'SS' : avgDev >= 60 ? 'S' : avgDev >= 55 ? 'A' : avgDev >= 50 ? 'B' : avgDev >= 45 ? 'C' : 'D'
+                const gradeColor = grade === 'SS' ? 'text-amber-300' : grade === 'S' ? 'text-yellow-300' : grade === 'A' ? 'text-sky-300' : grade === 'B' ? 'text-emerald-300' : 'text-slate-400'
                 const handleDownload = () => {
                   const canvas = shareCanvasRef.current
                   if (!canvas) return
@@ -3800,107 +3789,99 @@ export default function SearchApp({
                   if (!ctx) return
                   const W = 800, H = 460
                   canvas.width = W; canvas.height = H
-                  // background
                   const bg = ctx.createLinearGradient(0, 0, W, H)
                   bg.addColorStop(0, '#0f172a'); bg.addColorStop(0.5, '#1e1b4b'); bg.addColorStop(1, '#0f172a')
                   ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H)
-                  // top accent
                   const acc = ctx.createLinearGradient(0, 0, W, 0)
                   acc.addColorStop(0, '#6366f1'); acc.addColorStop(1, '#8b5cf6')
                   ctx.fillStyle = acc; ctx.fillRect(0, 0, W, 5)
-                  // header label
                   ctx.font = '14px sans-serif'; ctx.fillStyle = '#64748b'
                   ctx.fillText('セントラルマスターズ水泳大会', 36, 36)
-                  // name
                   ctx.font = `bold ${athleteForHistory.name.length > 6 ? '40px' : '52px'} sans-serif`
                   ctx.fillStyle = '#f8fafc'; ctx.fillText(athleteForHistory.name, 36, 100)
-                  // team + gender
                   ctx.font = '16px sans-serif'; ctx.fillStyle = '#94a3b8'
                   ctx.fillText(`${athleteForHistory.teamName}　${athleteForHistory.gender}`, 36, 130)
-                  // divider
                   ctx.strokeStyle = '#334155'; ctx.lineWidth = 1
                   ctx.beginPath(); ctx.moveTo(36, 148); ctx.lineTo(W - 36, 148); ctx.stroke()
-                  // stats
-                  const stats2 = [
-                    ['出場', `${athleteAnalysis.meetCount}回`],
-                    ['個人', `${athleteAnalysis.individualCount}本`],
-                    ['表彰台', `${athleteAnalysis.podiums}回`],
-                    ['大会新', `${athleteAnalysis.records}回`],
-                    ['得点', `${formatPoints(athleteAnalysis.totalPoints)}pt`],
-                  ]
+                  const stats2 = [['出場', `${athleteAnalysis.meetCount}回`], ['個人', `${athleteAnalysis.individualCount}本`], ['表彰台', `${athleteAnalysis.podiums}回`], ['大会新', `${athleteAnalysis.records}回`], ['得点', `${formatPoints(athleteAnalysis.totalPoints)}pt`]]
                   stats2.forEach(([label, value], i) => {
                     const x = 36 + i * 148
                     ctx.font = 'bold 28px sans-serif'; ctx.fillStyle = '#f1f5f9'; ctx.fillText(value, x, 192)
                     ctx.font = '12px sans-serif'; ctx.fillStyle = '#64748b'; ctx.fillText(label, x, 212)
                   })
-                  // divider
                   ctx.strokeStyle = '#334155'; ctx.lineWidth = 1
                   ctx.beginPath(); ctx.moveTo(36, 228); ctx.lineTo(W - 36, 228); ctx.stroke()
-                  // grade + deviation
                   if (avgDev != null && grade != null) {
                     const gc = grade === 'SS' ? '#fbbf24' : grade === 'S' ? '#fde047' : grade === 'A' ? '#38bdf8' : grade === 'B' ? '#34d399' : '#94a3b8'
                     ctx.font = 'bold 72px sans-serif'; ctx.fillStyle = gc; ctx.fillText(grade, 36, 318)
                     ctx.font = 'bold 28px sans-serif'; ctx.fillStyle = '#f1f5f9'; ctx.fillText(`偏差値 ${avgDev}`, 130, 290)
                   }
-                  // type
                   ctx.font = '18px sans-serif'; ctx.fillStyle = '#c4b5fd'
                   ctx.fillText(`${athleteAnalysis.athleteType.icon} ${athleteAnalysis.athleteType.title}`, 36, 360)
-                  // career summary (wrapped)
                   ctx.font = '13px sans-serif'; ctx.fillStyle = '#94a3b8'
-                  const words = athleteAnalysis.careerSummary
                   let line3 = '', ly = 390
-                  for (const ch of words) {
+                  for (const ch of athleteAnalysis.careerSummary) {
                     const test = line3 + ch
                     if (ctx.measureText(test).width > W - 72 && line3) { ctx.fillText(line3, 36, ly); line3 = ch; ly += 18 }
                     else line3 = test
                   }
                   if (line3) ctx.fillText(line3, 36, ly)
-                  // watermark
                   ctx.font = '11px sans-serif'; ctx.fillStyle = '#334155'
                   ctx.fillText('central-masters.vercel.app', W - 220, H - 14)
-                  // download
                   const link = document.createElement('a')
                   link.download = `${athleteForHistory.name}_キャリアカード.png`
                   link.href = canvas.toDataURL('image/png')
                   link.click()
                 }
                 return (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => setShowShareCard(false)}>
-                    <div className="w-full max-w-lg rounded-2xl border border-indigo-700/50 bg-slate-900 p-6" onClick={(e) => e.stopPropagation()}>
-                      <div className="mb-4 flex items-center justify-between">
-                        <h3 className="font-bold text-white">📱 キャリアカード</h3>
-                        <button type="button" className="text-slate-400 hover:text-white" onClick={() => setShowShareCard(false)}>✕</button>
-                      </div>
-                      {/* card preview */}
-                      <div className="mb-4 rounded-xl border border-indigo-600/40 bg-gradient-to-br from-slate-900 via-indigo-950/50 to-slate-900 p-5">
-                        <div className="mb-1 text-[10px] text-slate-500">セントラルマスターズ水泳大会</div>
-                        <div className="text-2xl font-black text-white">{athleteForHistory.name}</div>
-                        <div className="text-xs text-slate-400">{athleteForHistory.teamName}　{athleteForHistory.gender}</div>
-                        <div className="mt-3 flex flex-wrap gap-3 text-xs">
-                          {[['出場', `${athleteAnalysis.meetCount}回`], ['個人', `${athleteAnalysis.individualCount}本`], ['表彰台', `${athleteAnalysis.podiums}回`], ['大会新', `${athleteAnalysis.records}回`], ['得点', `${formatPoints(athleteAnalysis.totalPoints)}pt`]].map(([l, v]) => (
-                            <div key={l} className="text-center"><div className="font-black text-white">{v}</div><div className="text-slate-500">{l}</div></div>
-                          ))}
+                  <section className="mb-6 overflow-hidden rounded-2xl border border-indigo-700/50 bg-gradient-to-br from-slate-900 via-indigo-950/30 to-slate-900 shadow-lg shadow-indigo-950/30">
+                    <div className="h-1 bg-gradient-to-r from-indigo-500 via-violet-500 to-purple-500" />
+                    <div className="p-5">
+                      <div className="mb-4 flex items-start justify-between gap-3">
+                        <div>
+                          <div className="mb-1 text-[10px] font-medium tracking-widest text-indigo-400/70 uppercase">Career Card — セントラルマスターズ水泳大会</div>
+                          <div className="flex items-baseline gap-3 flex-wrap">
+                            <span className="text-3xl font-black text-white">{athleteForHistory.name}</span>
+                            <span className={`text-sm font-bold ${athleteForHistory.gender === '男子' ? 'text-sky-400' : 'text-rose-400'}`}>{athleteForHistory.gender}</span>
+                          </div>
+                          <div className="mt-0.5 text-xs text-slate-400">{athleteForHistory.teamName}</div>
                         </div>
+                        <button
+                          type="button"
+                          onClick={handleDownload}
+                          className="shrink-0 flex items-center gap-1.5 rounded-lg border border-indigo-600/50 bg-indigo-900/50 px-3 py-1.5 text-xs font-bold text-indigo-300 hover:bg-indigo-800/60 transition-colors"
+                          title="PNG ダウンロード"
+                        >
+                          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                          PNG
+                        </button>
+                      </div>
+
+                      <div className="mb-4 grid grid-cols-5 gap-2 rounded-xl border border-slate-700/60 bg-slate-800/40 px-3 py-3">
+                        {[['出場', `${athleteAnalysis.meetCount}回`], ['個人', `${athleteAnalysis.individualCount}本`], ['表彰台', `${athleteAnalysis.podiums}回`], ['大会新', `${athleteAnalysis.records}回`], ['得点', `${formatPoints(athleteAnalysis.totalPoints)}pt`]].map(([l, v]) => (
+                          <div key={l} className="text-center">
+                            <div className="text-sm font-black text-white">{v}</div>
+                            <div className="text-[9px] text-slate-500">{l}</div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
                         {avgDev != null && grade != null && (
-                          <div className="mt-3 flex items-center gap-2">
-                            <span className={`text-2xl font-black ${grade === 'SS' ? 'text-amber-300' : grade === 'S' ? 'text-yellow-300' : grade === 'A' ? 'text-sky-300' : 'text-emerald-300'}`}>{grade}</span>
-                            <span className="text-sm text-slate-400">偏差値 {avgDev}</span>
+                          <div className="flex items-baseline gap-2">
+                            <span className={`text-3xl font-black ${gradeColor}`}>{grade}</span>
+                            <span className="text-sm text-slate-400">偏差値 <span className="font-bold text-white">{avgDev}</span></span>
                           </div>
                         )}
-                        <div className="mt-2 text-xs text-violet-300">{athleteAnalysis.athleteType.icon} {athleteAnalysis.athleteType.title}</div>
-                        <div className="mt-1.5 text-[10px] text-slate-500 leading-relaxed">{athleteAnalysis.careerSummary}</div>
+                        <div className="text-sm text-violet-300">{athleteAnalysis.athleteType.icon} {athleteAnalysis.athleteType.title}</div>
                       </div>
-                      <canvas ref={shareCanvasRef} className="hidden" />
-                      <button
-                        type="button"
-                        onClick={handleDownload}
-                        className="w-full rounded-xl bg-indigo-600 py-3 text-sm font-bold text-white hover:bg-indigo-500 transition-colors"
-                      >
-                        PNG をダウンロード
-                      </button>
-                      <p className="mt-2 text-center text-[10px] text-slate-500">SNSや LINE でシェアしてください</p>
+
+                      {athleteAnalysis.careerSummary && (
+                        <p className="mt-3 text-[11px] leading-relaxed text-slate-400 border-t border-slate-700/50 pt-3">{athleteAnalysis.careerSummary}</p>
+                      )}
                     </div>
-                  </div>
+                    <canvas ref={shareCanvasRef} className="hidden" />
+                  </section>
                 )
               })()}
 
