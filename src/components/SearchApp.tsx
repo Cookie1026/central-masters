@@ -91,6 +91,7 @@ type AthleteEventStat = {
   overallRank: number
   totalParticipants: number
 }
+type TeamMemberRanking = { id: number; name: string; totalPoints: number; rank: number }
 type TimelineMilestone = {
   round: number
   icon: string
@@ -1055,6 +1056,10 @@ export default function SearchApp({
   const [rivalEventKey, setRivalEventKey] = useState('')
   const [rivalLoading, setRivalLoading] = useState(false)
   const [athleteStats, setAthleteStats] = useState<AthleteEventStat[] | null>(null)
+  const [teamRanking, setTeamRanking] = useState<TeamMemberRanking[] | null>(null)
+  const [teamRankingName, setTeamRankingName] = useState('')
+  const [showShareCard, setShowShareCard] = useState(false)
+  const shareCanvasRef = useRef<HTMLCanvasElement>(null)
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyDisqualification, setHistoryDisqualification] = useState<{
     code: string | null
@@ -1499,6 +1504,9 @@ export default function SearchApp({
       setRivalHistories({})
       setRivalEventKey('')
       setAthleteStats(null)
+      setTeamRanking(null)
+      setTeamRankingName('')
+      setShowShareCard(false)
       return
     }
     const controller = new AbortController()
@@ -1506,6 +1514,9 @@ export default function SearchApp({
     setRivalHistories({})
     setRivalEventKey('')
     setAthleteStats(null)
+    setTeamRanking(null)
+    setTeamRankingName('')
+    setShowShareCard(false)
     fetch(`/api/athlete-rivals?athleteId=${athleteForHistory.id}`, { signal: controller.signal })
       .then((response) => response.json())
       .then((data: { rivals?: RivalCandidate[] }) => setRivalCandidates(data.rivals ?? []))
@@ -1519,6 +1530,16 @@ export default function SearchApp({
       .catch((error) => {
         if (error instanceof DOMException && error.name === 'AbortError') return
         setAthleteStats([])
+      })
+    fetch(`/api/team-stats?athleteId=${athleteForHistory.id}`, { signal: controller.signal })
+      .then((response) => response.json())
+      .then((data: { teamName?: string; members?: TeamMemberRanking[] }) => {
+        setTeamRankingName(data.teamName ?? '')
+        setTeamRanking(data.members ?? [])
+      })
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === 'AbortError') return
+        setTeamRanking([])
       })
     return () => controller.abort()
   }, [athleteForHistory?.id])
@@ -3270,6 +3291,105 @@ export default function SearchApp({
     }
     timeline.sort((a, b) => a.round - b.round)
 
+    // キャリアサマリー文章
+    const eventPodiumMap = new Map<string, number>()
+    for (const meet of history) {
+      for (const r of meet.individual) {
+        if (r.rank != null && r.rank <= 3) eventPodiumMap.set(r.event, (eventPodiumMap.get(r.event) ?? 0) + 1)
+      }
+    }
+    const bestPodiumEvent = [...eventPodiumMap.entries()].sort((a, b) => b[1] - a[1])[0]
+    const firstRound = sortedHistory[0]?.round
+    let careerSummary = ''
+    if (firstRound != null && history.length > 0) {
+      const achievementParts: string[] = []
+      if (individualCount > 0) achievementParts.push(`個人${individualCount}本`)
+      if (podiums > 0) achievementParts.push(`表彰台${podiums}回`)
+      if (records > 0) achievementParts.push(`大会新${records}回`)
+      if (totalPoints > 0) achievementParts.push(`通算${formatPoints(totalPoints)}pt`)
+      const achievementStr = achievementParts.length > 0 ? `（${achievementParts.join('・')}）` : ''
+      const bestEventStr = bestPodiumEvent ? `。得意種目は${formatEventDisplay(bestPodiumEvent[0])}（表彰台${bestPodiumEvent[1]}回）` : ''
+      careerSummary = `第${firstRound}回から${history.length}大会に参加${achievementStr}${bestEventStr}。`
+    }
+
+    // 次のマイルストーン予測
+    type NextMilestone = { icon: string; label: string; detail: string; gap: string; color: 'sky' | 'amber' | 'violet' | 'emerald' }
+    let nextMilestone: NextMilestone | null = null
+    const hasGoldAchieved = (rankCounts.get(1) ?? 0) > 0
+    if (!hasGoldAchieved && podiums > 0) {
+      const closestToGold = nextRankTargets.find((t) => t.nextRank === 1)
+      if (closestToGold) {
+        nextMilestone = { icon: '🥇', label: '初優勝まであと一歩！', detail: `第${closestToGold.round}回 ${formatEventDisplay(closestToGold.event)}（${closestToGold.rank}位→1位）`, gap: `あと${closestToGold.gap.toFixed(2)}秒`, color: 'amber' }
+      }
+    } else if (podiums === 0) {
+      const closestToPodium = nextRankTargets.find((t) => t.nextRank <= 3)
+      if (closestToPodium) {
+        const podiumIcon = closestToPodium.nextRank === 1 ? '🥇' : closestToPodium.nextRank === 2 ? '🥈' : '🥉'
+        nextMilestone = { icon: podiumIcon, label: '初表彰台まであと一歩！', detail: `第${closestToPodium.round}回 ${formatEventDisplay(closestToPodium.event)}（${closestToPodium.rank}位→${closestToPodium.nextRank}位）`, gap: `あと${closestToPodium.gap.toFixed(2)}秒`, color: 'amber' }
+      }
+    }
+    if (!nextMilestone && records === 0 && recordCandidates[0]) {
+      nextMilestone = { icon: '⭐', label: '初大会新記録まであと一歩！', detail: formatEventDisplay(recordCandidates[0].event), gap: `あと${recordCandidates[0].gap.toFixed(2)}秒`, color: 'violet' }
+    }
+    if (!nextMilestone) {
+      const nextCount = [10, 25, 50, 100].find((n) => n > individualCount)
+      if (nextCount) {
+        nextMilestone = { icon: '🏊', label: `通算${nextCount}レース達成まで！`, detail: `個人レースの累計（現在${individualCount}本）`, gap: `あと${nextCount - individualCount}レース`, color: 'sky' }
+      }
+    }
+
+    // 自己ベスト更新ストリーク
+    const pbTracker2 = new Map<string, number>()
+    let pbCurrentStreak = 0, pbMaxStreak = 0, pbIsOnStreak = false
+    for (const meet of sortedHistory) {
+      let hadNewPB = false
+      for (const r of meet.individual) {
+        const sec = Number(r.time_seconds)
+        if (!Number.isFinite(sec) || sec <= 0) continue
+        const key2 = `${r.event}|${meet.pool_type}`
+        const prev = pbTracker2.get(key2)
+        if (prev !== undefined && sec < prev) hadNewPB = true
+        if (prev === undefined || sec < prev) pbTracker2.set(key2, sec)
+      }
+      if (hadNewPB) { pbCurrentStreak++; if (pbCurrentStreak > pbMaxStreak) pbMaxStreak = pbCurrentStreak; pbIsOnStreak = true }
+      else { pbCurrentStreak = 0; pbIsOnStreak = false }
+    }
+    const pbStreak = { current: pbCurrentStreak, max: pbMaxStreak, isOnStreak: pbIsOnStreak }
+
+    // ベスト大会診断
+    let bestMeetInfo: { round: number; poolType: string; points: number; podiums: number; records: number } | null = null
+    let bestMeetScore = -1
+    for (const meet of history) {
+      const mp = meet.individual.filter((r) => r.rank != null && r.rank <= 3).length + meet.relay.filter((r) => r.rank != null && r.rank <= 3).length
+      const mr = meet.individual.filter((r) => r.is_meet_record).length + meet.relay.filter((r) => r.is_meet_record).length
+      const sc = meet.athlete_points * 10 + mp * 5 + mr * 3
+      if (sc > bestMeetScore) { bestMeetScore = sc; bestMeetInfo = { round: meet.round, poolType: meet.pool_type, points: meet.athlete_points, podiums: mp, records: mr } }
+    }
+
+    // 種目ヒートマップ
+    const STROKES_ORDER = ['自由形', '背泳ぎ', '平泳ぎ', 'バタフライ', '個人メドレー']
+    const DIST_ORDER = ['25m', '50m', '100m', '200m', '400m', '800m', '1500m']
+    const heatLong = new Map<string, { bestRank: number; raceCount: number }>()
+    const heatShort = new Map<string, { bestRank: number; raceCount: number }>()
+    for (const meet of history) {
+      for (const r of meet.individual) {
+        if (r.rank == null) continue
+        const stroke = STROKES_ORDER.find((s) => r.event.includes(s))
+        const distMatch = r.event.match(/(\d+)m/)
+        if (!stroke || !distMatch) continue
+        const dist = distMatch[1] + 'm'
+        const key2 = `${stroke}|${dist}`
+        const map = meet.pool_type === '長水路' ? heatLong : heatShort
+        const existing = map.get(key2)
+        if (!existing || r.rank < existing.bestRank) map.set(key2, { bestRank: r.rank, raceCount: (existing?.raceCount ?? 0) + 1 })
+        else map.set(key2, { ...existing, raceCount: existing.raceCount + 1 })
+      }
+    }
+    const allHeatKeys = [...heatLong.keys(), ...heatShort.keys()]
+    const heatmapStrokes = STROKES_ORDER.filter((s) => allHeatKeys.some((k) => k.startsWith(s + '|')))
+    const heatmapDists = DIST_ORDER.filter((d) => allHeatKeys.some((k) => k.endsWith('|' + d)))
+    const heatmap = { long: heatLong, short: heatShort, strokes: heatmapStrokes, distances: heatmapDists }
+
     return {
       individualCount,
       relayCount,
@@ -3286,6 +3406,11 @@ export default function SearchApp({
       nextRankTargets,
       closestRecord: recordCandidates[0] ?? null,
       timeline,
+      careerSummary,
+      nextMilestone,
+      pbStreak,
+      bestMeet: bestMeetInfo,
+      heatmap,
     }
   }, [athleteHistory])
   const rivalComparison = useMemo(() => {
@@ -3437,7 +3562,7 @@ export default function SearchApp({
           ) : (
             <div>
               {/* Stat cards */}
-              <div className="grid grid-cols-2 gap-3 mb-5 sm:grid-cols-3 lg:grid-cols-6">
+              <div className="grid grid-cols-2 gap-3 mb-3 sm:grid-cols-3 lg:grid-cols-6">
                 {[
                   ['出場大会', `${athleteAnalysis.meetCount}回`],
                   ['個人レース', `${athleteAnalysis.individualCount}本`],
@@ -3453,41 +3578,331 @@ export default function SearchApp({
                 ))}
               </div>
 
-              {/* キャリアタイムライン */}
-              {athleteAnalysis.timeline.length > 0 && (
-                <div className="mb-6 overflow-x-auto pb-1">
-                  <div className="flex min-w-max items-center gap-0">
-                    {athleteAnalysis.timeline.map((milestone, i) => {
-                      const borderColor = milestone.color === 'sky' ? 'border-sky-600/60' : milestone.color === 'amber' ? 'border-amber-600/60' : milestone.color === 'violet' ? 'border-violet-600/60' : 'border-emerald-600/60'
-                      const bgColor = milestone.color === 'sky' ? 'bg-sky-950/60' : milestone.color === 'amber' ? 'bg-amber-950/60' : milestone.color === 'violet' ? 'bg-violet-950/60' : 'bg-emerald-950/60'
-                      const labelColor = milestone.color === 'sky' ? 'text-sky-300' : milestone.color === 'amber' ? 'text-amber-300' : milestone.color === 'violet' ? 'text-violet-300' : 'text-emerald-300'
-                      return (
-                        <div key={i} className="flex items-center">
-                          {i > 0 && <div className="w-6 h-px bg-gradient-to-r from-slate-600 to-slate-500 shrink-0" />}
-                          <div className={`shrink-0 rounded-xl border ${borderColor} ${bgColor} px-3 py-2 text-center min-w-[80px]`}>
-                            <div className="text-lg">{milestone.icon}</div>
-                            <div className={`text-[11px] font-bold mt-0.5 ${labelColor}`}>{milestone.label}</div>
-                            <div className="text-[9px] text-slate-400 mt-0.5 whitespace-nowrap">{milestone.detail}</div>
-                          </div>
-                        </div>
-                      )
-                    })}
+              {/* 自己ベスト更新ストリーク */}
+              {athleteAnalysis.pbStreak.max > 0 && (
+                <div className={`mb-4 flex items-center gap-3 rounded-xl border px-4 py-2.5 text-xs ${athleteAnalysis.pbStreak.isOnStreak ? 'border-orange-600/50 bg-orange-950/30' : 'border-slate-700 bg-slate-800/40'}`}>
+                  <span className="text-lg">{athleteAnalysis.pbStreak.isOnStreak ? '🔥' : '📈'}</span>
+                  <div className="flex-1">
+                    {athleteAnalysis.pbStreak.isOnStreak
+                      ? <span className="font-bold text-orange-300"><span className="text-xl font-black">{athleteAnalysis.pbStreak.current}</span>大会連続で自己ベスト更新中！</span>
+                      : <span className="text-slate-400">自己ベスト更新ストリーク</span>
+                    }
                   </div>
+                  <div className="text-slate-500">最高連続記録: <span className="font-bold text-slate-300">{athleteAnalysis.pbStreak.max}大会</span></div>
                 </div>
               )}
 
-              <section className="mb-6 overflow-hidden rounded-2xl border border-fuchsia-600/50 bg-gradient-to-r from-violet-950/80 via-fuchsia-950/55 to-slate-950 shadow-lg shadow-fuchsia-950/25">
-                <div className="flex items-center gap-4 px-5 py-5">
-                  <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-fuchsia-400/30 bg-fuchsia-950/70 text-3xl shadow-[0_0_24px_rgba(217,70,239,0.2)]">
-                    {athleteAnalysis.athleteType.icon}
+              {/* キャリアタイムライン */}
+              {athleteAnalysis.timeline.length > 0 && (
+                <div className="mb-6">
+                  <div className="overflow-x-auto pb-1 mb-3">
+                    <div className="flex min-w-max items-center gap-0">
+                      {athleteAnalysis.timeline.map((milestone, i) => {
+                        const borderColor = milestone.color === 'sky' ? 'border-sky-600/60' : milestone.color === 'amber' ? 'border-amber-600/60' : milestone.color === 'violet' ? 'border-violet-600/60' : 'border-emerald-600/60'
+                        const bgColor = milestone.color === 'sky' ? 'bg-sky-950/60' : milestone.color === 'amber' ? 'bg-amber-950/60' : milestone.color === 'violet' ? 'bg-violet-950/60' : 'bg-emerald-950/60'
+                        const labelColor = milestone.color === 'sky' ? 'text-sky-300' : milestone.color === 'amber' ? 'text-amber-300' : milestone.color === 'violet' ? 'text-violet-300' : 'text-emerald-300'
+                        return (
+                          <div key={i} className="flex items-center">
+                            {i > 0 && <div className="w-6 h-px bg-gradient-to-r from-slate-600 to-slate-500 shrink-0" />}
+                            <button
+                              type="button"
+                              title={`第${milestone.round}回の記録へジャンプ`}
+                              className={`shrink-0 rounded-xl border ${borderColor} ${bgColor} px-3 py-2 text-center min-w-[80px] cursor-pointer hover:brightness-125 transition-[filter] duration-150`}
+                              onClick={() => {
+                                setAthleteDetailOpenSections((prev) => new Set([...prev, 'records']))
+                                setTimeout(() => {
+                                  document.getElementById(`athlete-meet-${milestone.round}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                                }, 100)
+                              }}
+                            >
+                              <div className="text-lg">{milestone.icon}</div>
+                              <div className={`text-[11px] font-bold mt-0.5 ${labelColor}`}>{milestone.label}</div>
+                              <div className="text-[9px] text-slate-400 mt-0.5 whitespace-nowrap">{milestone.detail}</div>
+                            </button>
+                          </div>
+                        )
+                      })}
+                    </div>
                   </div>
-                  <div>
-                    <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-fuchsia-400">SWIMMER TYPE</div>
-                    <h3 className="mt-1 text-lg font-black text-white sm:text-xl">{athleteAnalysis.athleteType.title}</h3>
-                    <p className="mt-1 text-xs leading-relaxed text-fuchsia-100/75">{athleteAnalysis.athleteType.detail}</p>
-                  </div>
+
+                  {athleteAnalysis.careerSummary && (
+                    <p className="text-xs text-slate-400 leading-relaxed mb-3 px-1">{athleteAnalysis.careerSummary}</p>
+                  )}
+
+                  {athleteAnalysis.nextMilestone && (() => {
+                    const m = athleteAnalysis.nextMilestone!
+                    const borderCls = m.color === 'amber' ? 'border-amber-600/50' : m.color === 'violet' ? 'border-violet-600/50' : 'border-sky-600/50'
+                    const bgCls = m.color === 'amber' ? 'bg-amber-950/40' : m.color === 'violet' ? 'bg-violet-950/40' : 'bg-sky-950/40'
+                    const gapCls = m.color === 'amber' ? 'text-amber-300' : m.color === 'violet' ? 'text-violet-300' : 'text-sky-300'
+                    return (
+                      <div className={`rounded-xl border ${borderCls} ${bgCls} px-4 py-3 flex items-center gap-3`}>
+                        <span className="text-2xl shrink-0">{m.icon}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs font-bold text-white">{m.label}</div>
+                          <div className="text-[10px] text-slate-400 mt-0.5 truncate">{m.detail}</div>
+                        </div>
+                        <div className={`shrink-0 font-mono text-sm font-black ${gapCls}`}>{m.gap}</div>
+                      </div>
+                    )
+                  })()}
                 </div>
-              </section>
+              )}
+
+              <div className="mb-6 grid gap-4 sm:grid-cols-2">
+                <section className="overflow-hidden rounded-2xl border border-fuchsia-600/50 bg-gradient-to-r from-violet-950/80 via-fuchsia-950/55 to-slate-950 shadow-lg shadow-fuchsia-950/25">
+                  <div className="flex items-center gap-4 px-5 py-5">
+                    <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-fuchsia-400/30 bg-fuchsia-950/70 text-3xl shadow-[0_0_24px_rgba(217,70,239,0.2)]">
+                      {athleteAnalysis.athleteType.icon}
+                    </div>
+                    <div>
+                      <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-fuchsia-400">SWIMMER TYPE</div>
+                      <h3 className="mt-1 text-base font-black text-white sm:text-lg">{athleteAnalysis.athleteType.title}</h3>
+                      <p className="mt-1 text-xs leading-relaxed text-fuchsia-100/75">{athleteAnalysis.athleteType.detail}</p>
+                    </div>
+                  </div>
+                </section>
+
+                {athleteAnalysis.bestMeet && (
+                  <section className="overflow-hidden rounded-2xl border border-rose-700/50 bg-rose-950/20">
+                    <div className="border-b border-rose-800/40 bg-gradient-to-r from-rose-950/80 to-pink-950/60 px-4 py-3">
+                      <h3 className="font-bold text-rose-100">🏆 ベスト大会</h3>
+                      <p className="mt-0.5 text-[10px] text-rose-300/70">最もパフォーマンスが高かった大会</p>
+                    </div>
+                    <div className="p-4 flex flex-col items-center justify-center gap-2 text-center">
+                      <div className="text-4xl font-black text-rose-300">第{athleteAnalysis.bestMeet.round}回</div>
+                      <div className="text-xs text-slate-400">{athleteAnalysis.bestMeet.poolType}</div>
+                      <div className="mt-1 flex gap-4 text-xs">
+                        <div><span className="font-bold text-white">{formatPoints(athleteAnalysis.bestMeet.points)}pt</span><span className="ml-1 text-slate-500">獲得</span></div>
+                        {athleteAnalysis.bestMeet.podiums > 0 && <div><span className="font-bold text-amber-300">{athleteAnalysis.bestMeet.podiums}回</span><span className="ml-1 text-slate-500">表彰台</span></div>}
+                        {athleteAnalysis.bestMeet.records > 0 && <div><span className="font-bold text-violet-300">{athleteAnalysis.bestMeet.records}回</span><span className="ml-1 text-slate-500">大会新</span></div>}
+                      </div>
+                      <button
+                        type="button"
+                        className="mt-2 text-[10px] text-rose-400 hover:text-rose-300 underline"
+                        onClick={() => {
+                          setAthleteDetailOpenSections((prev) => new Set([...prev, 'records']))
+                          setTimeout(() => document.getElementById(`athlete-meet-${athleteAnalysis.bestMeet!.round}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100)
+                        }}
+                      >
+                        この大会の記録を見る →
+                      </button>
+                    </div>
+                  </section>
+                )}
+              </div>
+
+              {/* 種目ヒートマップ */}
+              {athleteAnalysis.heatmap.strokes.length > 0 && athleteAnalysis.heatmap.distances.length > 0 && (
+                <section className="mb-6 overflow-hidden rounded-2xl border border-slate-700 bg-slate-900/50">
+                  <div className="border-b border-slate-700 bg-slate-800/60 px-4 py-3">
+                    <h3 className="font-bold text-slate-100">🗺️ 種目マップ</h3>
+                    <p className="mt-0.5 text-[10px] text-slate-400">各種目のベスト順位（短水路/長水路）</p>
+                  </div>
+                  <div className="overflow-x-auto p-4">
+                    <table className="min-w-max text-[11px]">
+                      <thead>
+                        <tr>
+                          <th className="pr-3 text-left font-medium text-slate-500" />
+                          {athleteAnalysis.heatmap.distances.map((d) => (
+                            <th key={d} className="px-2 py-1 text-center font-medium text-slate-400">{d}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {athleteAnalysis.heatmap.strokes.map((stroke) => (
+                          <tr key={stroke}>
+                            <td className="pr-4 py-1 text-right text-xs font-medium text-slate-400 whitespace-nowrap">{stroke}</td>
+                            {athleteAnalysis.heatmap.distances.map((dist) => {
+                              const key2 = `${stroke}|${dist}`
+                              const longCell = athleteAnalysis.heatmap.long.get(key2)
+                              const shortCell = athleteAnalysis.heatmap.short.get(key2)
+                              const hasAny = longCell || shortCell
+                              const rankColor = (r: number) => r === 1 ? 'bg-amber-400/80 text-amber-900' : r === 2 ? 'bg-slate-300/80 text-slate-900' : r === 3 ? 'bg-orange-500/70 text-orange-100' : r <= 6 ? 'bg-sky-600/60 text-sky-100' : 'bg-slate-700/60 text-slate-300'
+                              return (
+                                <td key={dist} className="px-1 py-0.5">
+                                  {hasAny ? (
+                                    <div className="flex gap-0.5 justify-center">
+                                      {shortCell ? <div className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${rankColor(shortCell.bestRank)}`} title={`短水路 ${shortCell.bestRank}位`}>{shortCell.bestRank}位<span className="ml-0.5 opacity-60">短</span></div> : <div className="w-8" />}
+                                      {longCell ? <div className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${rankColor(longCell.bestRank)}`} title={`長水路 ${longCell.bestRank}位`}>{longCell.bestRank}位<span className="ml-0.5 opacity-60">長</span></div> : <div className="w-8" />}
+                                    </div>
+                                  ) : (
+                                    <div className="text-center text-slate-700">—</div>
+                                  )}
+                                </td>
+                              )
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              )}
+
+              {/* チーム内貢献ランキング */}
+              {teamRanking != null && teamRanking.length > 0 && athleteForHistory && (
+                <section className="mb-6 overflow-hidden rounded-2xl border border-teal-700/50 bg-teal-950/20">
+                  <div className="border-b border-teal-800/40 bg-gradient-to-r from-teal-950/80 to-cyan-950/60 px-4 py-3">
+                    <h3 className="font-bold text-teal-100">👥 チーム内得点ランキング</h3>
+                    <p className="mt-0.5 text-[10px] text-teal-300/70">{teamRankingName}の全選手（個人＋リレー総計）</p>
+                  </div>
+                  <div className="p-4">
+                    <div className="space-y-2">
+                      {teamRanking.slice(0, 10).map((member) => {
+                        const isMe = member.id === athleteForHistory.id
+                        const maxPts = teamRanking[0].totalPoints
+                        return (
+                          <div key={member.id} className={`flex items-center gap-3 rounded-lg px-3 py-2 ${isMe ? 'bg-teal-900/40 border border-teal-600/40' : 'bg-slate-800/30'}`}>
+                            <span className={`w-7 text-center text-xs font-bold ${member.rank === 1 ? 'text-amber-300' : member.rank === 2 ? 'text-slate-300' : member.rank === 3 ? 'text-orange-400' : 'text-slate-500'}`}>
+                              {member.rank === 1 ? '🥇' : member.rank === 2 ? '🥈' : member.rank === 3 ? '🥉' : `${member.rank}位`}
+                            </span>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <span className={`text-xs font-medium truncate ${isMe ? 'text-teal-200' : 'text-slate-300'}`}>{member.name}</span>
+                                {isMe && <span className="shrink-0 rounded bg-teal-700/60 px-1 py-0.5 text-[9px] font-bold text-teal-200">YOU</span>}
+                              </div>
+                              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-700">
+                                <div className={`h-full rounded-full ${isMe ? 'bg-teal-400' : 'bg-teal-700'}`} style={{ width: `${member.totalPoints / maxPts * 100}%` }} />
+                              </div>
+                            </div>
+                            <span className={`shrink-0 font-mono text-xs font-bold ${isMe ? 'text-teal-300' : 'text-slate-400'}`}>{formatPoints(member.totalPoints)}pt</span>
+                          </div>
+                        )
+                      })}
+                      {teamRanking.length > 10 && (
+                        <p className="text-center text-[10px] text-slate-500">… 他{teamRanking.length - 10}名</p>
+                      )}
+                    </div>
+                  </div>
+                </section>
+              )}
+
+              {/* SNSシェアカードボタン + モーダル */}
+              <div className="mb-6 flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => setShowShareCard(true)}
+                  className="flex items-center gap-2 rounded-xl border border-indigo-600/50 bg-indigo-950/40 px-5 py-2.5 text-sm font-bold text-indigo-300 hover:bg-indigo-900/60 transition-colors"
+                >
+                  📱 キャリアカードをシェアする
+                </button>
+              </div>
+
+              {showShareCard && athleteForHistory && (() => {
+                const avgDev = athleteStats && athleteStats.length > 0
+                  ? Math.round(athleteStats.reduce((s, e) => s + e.deviation, 0) / athleteStats.length * 10) / 10
+                  : null
+                const grade = avgDev == null ? null : avgDev >= 65 ? 'SS' : avgDev >= 60 ? 'S' : avgDev >= 55 ? 'A' : avgDev >= 50 ? 'B' : avgDev >= 45 ? 'C' : 'D'
+                const handleDownload = () => {
+                  const canvas = shareCanvasRef.current
+                  if (!canvas) return
+                  const ctx = canvas.getContext('2d')
+                  if (!ctx) return
+                  const W = 800, H = 460
+                  canvas.width = W; canvas.height = H
+                  // background
+                  const bg = ctx.createLinearGradient(0, 0, W, H)
+                  bg.addColorStop(0, '#0f172a'); bg.addColorStop(0.5, '#1e1b4b'); bg.addColorStop(1, '#0f172a')
+                  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H)
+                  // top accent
+                  const acc = ctx.createLinearGradient(0, 0, W, 0)
+                  acc.addColorStop(0, '#6366f1'); acc.addColorStop(1, '#8b5cf6')
+                  ctx.fillStyle = acc; ctx.fillRect(0, 0, W, 5)
+                  // header label
+                  ctx.font = '14px sans-serif'; ctx.fillStyle = '#64748b'
+                  ctx.fillText('セントラルマスターズ水泳大会', 36, 36)
+                  // name
+                  ctx.font = `bold ${athleteForHistory.name.length > 6 ? '40px' : '52px'} sans-serif`
+                  ctx.fillStyle = '#f8fafc'; ctx.fillText(athleteForHistory.name, 36, 100)
+                  // team + gender
+                  ctx.font = '16px sans-serif'; ctx.fillStyle = '#94a3b8'
+                  ctx.fillText(`${athleteForHistory.teamName}　${athleteForHistory.gender}`, 36, 130)
+                  // divider
+                  ctx.strokeStyle = '#334155'; ctx.lineWidth = 1
+                  ctx.beginPath(); ctx.moveTo(36, 148); ctx.lineTo(W - 36, 148); ctx.stroke()
+                  // stats
+                  const stats2 = [
+                    ['出場', `${athleteAnalysis.meetCount}回`],
+                    ['個人', `${athleteAnalysis.individualCount}本`],
+                    ['表彰台', `${athleteAnalysis.podiums}回`],
+                    ['大会新', `${athleteAnalysis.records}回`],
+                    ['得点', `${formatPoints(athleteAnalysis.totalPoints)}pt`],
+                  ]
+                  stats2.forEach(([label, value], i) => {
+                    const x = 36 + i * 148
+                    ctx.font = 'bold 28px sans-serif'; ctx.fillStyle = '#f1f5f9'; ctx.fillText(value, x, 192)
+                    ctx.font = '12px sans-serif'; ctx.fillStyle = '#64748b'; ctx.fillText(label, x, 212)
+                  })
+                  // divider
+                  ctx.strokeStyle = '#334155'; ctx.lineWidth = 1
+                  ctx.beginPath(); ctx.moveTo(36, 228); ctx.lineTo(W - 36, 228); ctx.stroke()
+                  // grade + deviation
+                  if (avgDev != null && grade != null) {
+                    const gc = grade === 'SS' ? '#fbbf24' : grade === 'S' ? '#fde047' : grade === 'A' ? '#38bdf8' : grade === 'B' ? '#34d399' : '#94a3b8'
+                    ctx.font = 'bold 72px sans-serif'; ctx.fillStyle = gc; ctx.fillText(grade, 36, 318)
+                    ctx.font = 'bold 28px sans-serif'; ctx.fillStyle = '#f1f5f9'; ctx.fillText(`偏差値 ${avgDev}`, 130, 290)
+                  }
+                  // type
+                  ctx.font = '18px sans-serif'; ctx.fillStyle = '#c4b5fd'
+                  ctx.fillText(`${athleteAnalysis.athleteType.icon} ${athleteAnalysis.athleteType.title}`, 36, 360)
+                  // career summary (wrapped)
+                  ctx.font = '13px sans-serif'; ctx.fillStyle = '#94a3b8'
+                  const words = athleteAnalysis.careerSummary
+                  let line3 = '', ly = 390
+                  for (const ch of words) {
+                    const test = line3 + ch
+                    if (ctx.measureText(test).width > W - 72 && line3) { ctx.fillText(line3, 36, ly); line3 = ch; ly += 18 }
+                    else line3 = test
+                  }
+                  if (line3) ctx.fillText(line3, 36, ly)
+                  // watermark
+                  ctx.font = '11px sans-serif'; ctx.fillStyle = '#334155'
+                  ctx.fillText('central-masters.vercel.app', W - 220, H - 14)
+                  // download
+                  const link = document.createElement('a')
+                  link.download = `${athleteForHistory.name}_キャリアカード.png`
+                  link.href = canvas.toDataURL('image/png')
+                  link.click()
+                }
+                return (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => setShowShareCard(false)}>
+                    <div className="w-full max-w-lg rounded-2xl border border-indigo-700/50 bg-slate-900 p-6" onClick={(e) => e.stopPropagation()}>
+                      <div className="mb-4 flex items-center justify-between">
+                        <h3 className="font-bold text-white">📱 キャリアカード</h3>
+                        <button type="button" className="text-slate-400 hover:text-white" onClick={() => setShowShareCard(false)}>✕</button>
+                      </div>
+                      {/* card preview */}
+                      <div className="mb-4 rounded-xl border border-indigo-600/40 bg-gradient-to-br from-slate-900 via-indigo-950/50 to-slate-900 p-5">
+                        <div className="mb-1 text-[10px] text-slate-500">セントラルマスターズ水泳大会</div>
+                        <div className="text-2xl font-black text-white">{athleteForHistory.name}</div>
+                        <div className="text-xs text-slate-400">{athleteForHistory.teamName}　{athleteForHistory.gender}</div>
+                        <div className="mt-3 flex flex-wrap gap-3 text-xs">
+                          {[['出場', `${athleteAnalysis.meetCount}回`], ['個人', `${athleteAnalysis.individualCount}本`], ['表彰台', `${athleteAnalysis.podiums}回`], ['大会新', `${athleteAnalysis.records}回`], ['得点', `${formatPoints(athleteAnalysis.totalPoints)}pt`]].map(([l, v]) => (
+                            <div key={l} className="text-center"><div className="font-black text-white">{v}</div><div className="text-slate-500">{l}</div></div>
+                          ))}
+                        </div>
+                        {avgDev != null && grade != null && (
+                          <div className="mt-3 flex items-center gap-2">
+                            <span className={`text-2xl font-black ${grade === 'SS' ? 'text-amber-300' : grade === 'S' ? 'text-yellow-300' : grade === 'A' ? 'text-sky-300' : 'text-emerald-300'}`}>{grade}</span>
+                            <span className="text-sm text-slate-400">偏差値 {avgDev}</span>
+                          </div>
+                        )}
+                        <div className="mt-2 text-xs text-violet-300">{athleteAnalysis.athleteType.icon} {athleteAnalysis.athleteType.title}</div>
+                        <div className="mt-1.5 text-[10px] text-slate-500 leading-relaxed">{athleteAnalysis.careerSummary}</div>
+                      </div>
+                      <canvas ref={shareCanvasRef} className="hidden" />
+                      <button
+                        type="button"
+                        onClick={handleDownload}
+                        className="w-full rounded-xl bg-indigo-600 py-3 text-sm font-bold text-white hover:bg-indigo-500 transition-colors"
+                      >
+                        PNG をダウンロード
+                      </button>
+                      <p className="mt-2 text-center text-[10px] text-slate-500">SNSや LINE でシェアしてください</p>
+                    </div>
+                  </div>
+                )
+              })()}
 
               <div className="mb-6 grid gap-4 lg:grid-cols-2">
                 <section className="overflow-hidden rounded-2xl border border-amber-700/50 bg-amber-950/20">
@@ -3576,7 +3991,7 @@ export default function SearchApp({
               {/* パフォーマンス偏差値 + 種目別ランキングバッジ */}
               {athleteStats != null && athleteStats.length > 0 && (() => {
                 const avgDeviation = Math.round(athleteStats.reduce((s, e) => s + e.deviation, 0) / athleteStats.length * 10) / 10
-                const grade = avgDeviation >= 70 ? 'SS' : avgDeviation >= 65 ? 'S' : avgDeviation >= 60 ? 'A' : avgDeviation >= 55 ? 'B' : avgDeviation >= 50 ? 'C' : avgDeviation >= 45 ? 'D' : 'E'
+                const grade = avgDeviation >= 65 ? 'SS' : avgDeviation >= 60 ? 'S' : avgDeviation >= 55 ? 'A' : avgDeviation >= 50 ? 'B' : avgDeviation >= 45 ? 'C' : avgDeviation >= 40 ? 'D' : 'E'
                 const gradeColor = grade === 'SS' ? 'text-amber-300' : grade === 'S' ? 'text-yellow-300' : grade === 'A' ? 'text-sky-300' : grade === 'B' ? 'text-emerald-300' : grade === 'C' ? 'text-slate-300' : 'text-slate-400'
                 return (
                   <div className="mb-6 grid gap-4 lg:grid-cols-2">
@@ -3596,7 +4011,7 @@ export default function SearchApp({
                             {grade}
                           </div>
                           <div className="flex-1 text-[10px] text-slate-500 leading-relaxed">
-                            {grade === 'SS' ? '傑出した成績。このカテゴリーのトップクラスです' : grade === 'S' ? 'とても高い水準。上位グループに入っています' : grade === 'A' ? '平均以上の実力です' : grade === 'B' ? '平均よりやや上の水準' : grade === 'C' ? '平均的な水準' : 'これからの成長が楽しみ'}
+                            {grade === 'SS' ? '傑出した成績。このカテゴリーのエリートです' : grade === 'S' ? '非常に高い水準。上位グループで輝いています' : grade === 'A' ? '平均を大きく上回る実力です' : grade === 'B' ? '平均よりやや上の水準' : grade === 'C' ? '平均的な水準' : 'これからの成長が楽しみ'}
                           </div>
                         </div>
                         <div className="space-y-2">
@@ -3868,7 +4283,7 @@ export default function SearchApp({
                 {athleteDetailOpenSections.has('records') && (
                   <div className="space-y-5 bg-gradient-to-b from-sky-950/35 to-slate-950/20 p-4 sm:p-5">
                     {athleteHistory.map((meet) => (
-                      <section key={meet.round} className="overflow-hidden rounded-xl border border-slate-700 bg-slate-900/50">
+                      <section key={meet.round} id={`athlete-meet-${meet.round}`} className="overflow-hidden rounded-xl border border-slate-700 bg-slate-900/50">
                         <div className="flex items-center justify-between border-b border-slate-700 bg-slate-800/60 px-4 py-3">
                           <h3 className="text-sm font-bold text-sky-300">第{meet.round}回（{meet.pool_type}）</h3>
                           <div className="flex items-center gap-3">

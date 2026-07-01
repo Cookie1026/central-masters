@@ -100,23 +100,33 @@ export interface AthleteHistoryIndividual {
   is_meet_record: boolean
   disqualification_code: string | null
   is_withdrawal: boolean
+  next_rank: number | null
+  next_rank_gap_seconds: number | null
 }
 
 export interface AthleteHistoryRelay {
   event: string
   age_group: string | null
   time_display: string | null
+  time_seconds: string | null
   rank: number | null
   team_points: number | null
   is_meet_record: boolean
   disqualification_code: string | null
   is_withdrawal: boolean
+  swim_order: number | null
+  stroke: string | null
+  split_seconds: number | null
+  dive_time: number | null
 }
 
 export interface AthleteHistoryMeet {
   round: number
   pool_type: string
   date: string | null
+  athlete_points: number
+  team_total_points: number | null
+  contribution_percent: number | null
   individual: AthleteHistoryIndividual[]
   relay: AthleteHistoryRelay[]
 }
