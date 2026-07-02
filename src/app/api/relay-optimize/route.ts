@@ -54,16 +54,16 @@ export async function GET(request: Request) {
     .eq('event_id', eventId)
     .order('rank', { ascending: true })
 
-  // 4. このチームの全個人結果
+  // 4. このチームの全個人結果（全大会分）— リレー要員でも個人種目タイムを持っている場合に候補として使えるよう全大会から取得
   const { data: individualResults } = await supabaseServer
     .from('dt_result_person')
     .select(`
-      rank, time_seconds, time_display, points,
+      rank, time_seconds,
       dt_player_person!inner(id, name, gender),
       mst_category!inner(id, name, stroke, distance)
     `)
-    .eq('event_id', eventId)
     .eq('team_id', teamId)
+    .not('time_seconds', 'is', null)
 
   // relay ranking maps per (category_id, age_group_label)
   const relayFieldMap = new Map<string, { rank: number; time_seconds: number }[]>()
@@ -114,9 +114,8 @@ export async function GET(request: Request) {
     const strokeByOrder = relayOrderMap.get(relayStroke)
     const legDistance = distance / relayCount
 
-    // 各泳順の候補者を収集
-    // - 実際にリレーを泳いだ選手（split_seconds 使用）
-    // - 同ストロークの個人種目を泳いだ選手（individual time 使用）
+    // 各泳順の候補者を収集（個人種目タイムのみ使用）
+    // ※ split_seconds は50mリレーでの25m通過スプリットであり区間タイムではないため除外
     type Candidate = {
       id: number
       name: string
@@ -131,21 +130,7 @@ export async function GET(request: Request) {
       const requiredStroke = strokeByOrder?.get(order) ?? fallbackStroke
       const candidateMap = new Map<number, Candidate>()
 
-      // リレースプリットタイムを持つ実際のメンバー
-      for (const m of sortedMembers) {
-        if (m.swim_order !== order) continue
-        const t = Number(m.split_seconds ?? 0)
-        if (!t) continue
-        candidateMap.set(m.dt_player_person.id, {
-          id: m.dt_player_person.id,
-          name: m.dt_player_person.name,
-          gender: m.dt_player_person.gender,
-          seconds: t,
-          source: 'relay',
-        })
-      }
-
-      // 同ストローク・同距離の個人タイムを持つ選手（より速ければ上書き）
+      // 同ストローク・同距離の個人タイムを持つ選手のみ候補とする
       for (const ind of (individualResults ?? [])) {
         const indStroke = (ind.mst_category as { stroke?: string }).stroke ?? ''
         const indDist = (ind.mst_category as { distance?: number }).distance ?? 0
@@ -221,6 +206,8 @@ export async function GET(request: Request) {
 
     // 最適タイムで何位になれるか予測
     const fieldSorted = [...field].sort((a, b) => a.time_seconds - b.time_seconds)
+    const fieldTimes = fieldSorted.map((f) => f.time_seconds)
+    const firstPlaceTime = fieldTimes[0] ?? null
     let optimalRank = fieldSorted.length + 1
     for (let i = 0; i < fieldSorted.length; i++) {
       if (bestTime <= fieldSorted[i].time_seconds) { optimalRank = i + 1; break }
@@ -266,10 +253,16 @@ export async function GET(request: Request) {
         })),
       pointsGain,
       isCurrentOptimal,
+      firstPlaceTime,
+      fieldTimes,
       candidatesPerOrder: candidatesPerOrder.map((cs, i) => ({
         order: i + 1,
         stroke: getStrokeLabel(i + 1),
         count: cs.length,
+        candidates: [...cs]
+          .sort((a, b) => a.seconds - b.seconds)
+          .slice(0, 10)
+          .map((c) => ({ name: c.name, seconds: c.seconds, source: c.source })),
       })),
     }
   })

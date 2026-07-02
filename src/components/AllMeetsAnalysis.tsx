@@ -407,7 +407,7 @@ export default function AllMeetsAnalysis({ standings, onRoundSelect, focusTeamNa
                 emoji="💡"
                 title={`${focusDisplay}が伸びるには`}
                 color="rose"
-                body={`上位チームとの差は主に参加人数と種目カバー率にあります。リレー種目でのメンバー組み合わせ最適化が次回大会の得点アップの近道。「リレー最適化」タブで試してみましょう！`}
+                body={`上位チームとの差は主に参加人数と競技カバー率にあります。リレー競技でのメンバー組み合わせ最適化が次回大会の得点アップの近道。「リレー最適化」タブで試してみましょう！`}
               />
             </div>
           </div>

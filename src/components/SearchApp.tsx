@@ -5,6 +5,8 @@ import Image from 'next/image'
 import { getAthleteProfile } from '@/data/athlete-profiles'
 import AllMeetsAnalysis from '@/components/AllMeetsAnalysis'
 import RelayOptimizer from '@/components/RelayOptimizer'
+import RaceGame from '@/components/RaceGame'
+import { formatEventDisplay } from '@/lib/event-display'
 import type {
   MeetOption,
   EventOption,
@@ -30,7 +32,7 @@ interface Props {
 
 type TeamGroup = TeamOption & { ids: number[]; displayName: string }
 type EventGroup = EventOption & { ids: number[] }
-type MainTab = 'results' | 'team' | 'relay-optimize' | 'athlete' | 'age-rank' | 'meet-records' | 'disqualification'
+type MainTab = 'results' | 'team' | 'relay-optimize' | 'athlete' | 'age-rank' | 'meet-records' | 'disqualification' | 'race-game'
 type ResultFilter = 'all' | 'individual' | 'relay'
 type AthleteDetailView = 'overview' | 'trends' | 'records' | 'age-rank-indiv'
 type DisqualificationRule = {
@@ -143,11 +145,6 @@ function parseEventName(name: string): { type: string; distance: string; typeIdx
     typeIdx: typeMatch != null ? (EVENT_TYPE_ORDER as readonly string[]).indexOf(typeMatch) : 99,
     distNum,
   }
-}
-
-function formatEventDisplay(name: string): string {
-  const { type, distance } = parseEventName(name)
-  return distance ? `${type} ${distance}` : name
 }
 
 function compareEventNames(a: string, b: string): number {
@@ -315,7 +312,7 @@ function AthleteTrendCard({ trend }: { trend: AthleteTrend }) {
     <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-4">
       <div className="flex items-start justify-between gap-3 mb-2">
         <div>
-          <h3 className="text-sm font-bold text-white">{trend.event}</h3>
+          <h3 className="text-sm font-bold text-white">{formatEventDisplay(trend.event)}</h3>
           <span className="text-[10px] text-sky-500">{trend.poolType}</span>
         </div>
         <div className="text-right">
@@ -341,7 +338,7 @@ function AthleteTrendCard({ trend }: { trend: AthleteTrend }) {
         </label>
       </div>
 
-      <svg viewBox={`0 0 ${width} ${height}`} className="h-36 w-full" role="img" aria-label={`${trend.event}のタイム・順位推移`}>
+      <svg viewBox={`0 0 ${width} ${height}`} className="h-36 w-full" role="img" aria-label={`${formatEventDisplay(trend.event)}のタイム・順位推移`}>
         {timeTicks.map((tick, index) => {
           const y = padTop + (index / 2) * plotHeight
           return (
@@ -958,10 +955,10 @@ function SortTh<T extends string>({
       className={`px-3 py-2.5 font-semibold text-xs cursor-pointer select-none hover:bg-sky-800/50 transition-colors whitespace-nowrap align-top ${active ? 'text-sky-200' : 'text-slate-300'} ${className}`}
       onClick={() => onSort(field)}
     >
-      {children}
-      <span className={`ml-1 text-[9px] ${active ? 'text-sky-400' : 'opacity-25'}`}>
+      <div>{children}</div>
+      <div className={`text-[8px] mt-0.5 ${active ? 'text-sky-400' : 'opacity-20'}`}>
         {active ? (dir === 'asc' ? '△' : '▽') : '△▽'}
-      </span>
+      </div>
     </th>
   )
 }
@@ -1067,6 +1064,9 @@ export default function SearchApp({
   const [canGoBack, setCanGoBack] = useState(false)
   const [activeTab, setActiveTab] = useState<MainTab>('results')
   const [resultFilter, setResultFilter] = useState<ResultFilter>('all')
+  const [rightPanelTab, setRightPanelTab] = useState<'digest' | 'history'>('digest')
+  const [quickStroke, setQuickStroke] = useState<string | null>(null)
+  const [quickDist, setQuickDist] = useState<string | null>(null)
   const [athleteDetailView, setAthleteDetailView] = useState<AthleteDetailView>('overview')
   const [athleteDetailOpenSections, setAthleteDetailOpenSections] = useState<Set<'records' | 'trends' | 'age-rank'>>(new Set(['records', 'trends', 'age-rank']))
   const [teamStandings, setTeamStandings] = useState<TeamStanding[]>([])
@@ -1475,6 +1475,7 @@ export default function SearchApp({
 
   const fetchAthleteHistory = useCallback((id: number, name: string, genderStr: string, teamName?: string, updateAddress = true) => {
     setAthleteDetailView('overview')
+    setRightPanelTab('history')
     setAthleteForHistory({ id, name, gender: genderStr, teamName: teamName ?? '' })
     setAthleteHistory(null)
     setHistoryLoading(true)
@@ -1692,9 +1693,8 @@ export default function SearchApp({
       setAthleteForHistory(null)
       setAthleteHistory(null)
       setAthleteDetailView('overview')
-      if (activeTab === 'athlete') setActiveTab('results')
       updateUrl({
-        tab: activeTab === 'athlete' ? 'results' : activeTab,
+        tab: activeTab,
         athleteId: null,
         athleteView: null,
       })
@@ -2799,7 +2799,174 @@ export default function SearchApp({
   if (rankFilter) contextChips.push({ label: `${rankFilter}位`, color: 'text-slate-300' })
   if (recordType) contextChips.push({ label: recordType, color: 'text-amber-400' })
 
-  const individualTable = sortedResults.length > 0 && (
+  const resultsDigest = useMemo(() => {
+    type DigestAthlete = {
+      id: number
+      name: string
+      gender: string
+      team: string
+      points: number
+      golds: number
+      podiums: number
+      records: number
+      individualRaces: number
+      relayRaces: number
+    }
+    const athleteMap = new Map<number, DigestAthlete>()
+    const getAthlete = (id: number, name: string, genderValue: string, team: string) => {
+      const existing = athleteMap.get(id)
+      if (existing) return existing
+      const athlete = { id, name, gender: genderValue, team, points: 0, golds: 0, podiums: 0, records: 0, individualRaces: 0, relayRaces: 0 }
+      athleteMap.set(id, athlete)
+      return athlete
+    }
+    const includeIndividual = resultFilter !== 'relay'
+    const includeRelay = resultFilter !== 'individual'
+    const spotlights: {
+      key: string
+      athleteId: number | null
+      name: string
+      gender: string
+      team: string
+      event: string
+      round: number
+      headline: string
+      detail: string
+      tone: 'amber' | 'cyan' | 'violet'
+      priority: number
+    }[] = []
+
+    if (includeIndividual) {
+      for (const result of sortedResults) {
+        const athlete = getAthlete(
+          result.player_id,
+          result.dt_player_person.name,
+          result.dt_player_person.gender,
+          result.dt_player_person.mst_team.name,
+        )
+        athlete.points += Number(result.points ?? 0)
+        athlete.individualRaces += 1
+        if (result.rank === 1) athlete.golds += 1
+        if (result.rank != null && result.rank <= 3) athlete.podiums += 1
+        if (result.is_meet_record) athlete.records += 1
+        const seconds = Number(result.time_seconds)
+        const recordSeconds = Number(result.meet_record_seconds)
+        const gap = Number.isFinite(seconds) && Number.isFinite(recordSeconds) ? seconds - recordSeconds : null
+        if (result.is_meet_record || (gap != null && gap >= 0 && gap <= 1)) {
+          spotlights.push({
+            key: `individual-${result.id}`,
+            athleteId: result.player_id,
+            name: result.dt_player_person.name,
+            gender: result.dt_player_person.gender,
+            team: result.dt_player_person.mst_team.name,
+            event: result.mst_category.name,
+            round: result.mst_event.round,
+            headline: result.is_meet_record ? '大会新！' : `大会新まであと${gap!.toFixed(2)}秒`,
+            detail: `${result.time_display ?? '－'}・${result.rank != null ? `${result.rank}位` : '順位なし'}`,
+            tone: result.is_meet_record ? 'amber' : 'cyan',
+            priority: result.is_meet_record ? -10 : gap ?? 99,
+          })
+        }
+      }
+    }
+
+    if (includeRelay) {
+      for (const result of relayResults) {
+        const members = result.dt_player_relay.filter((member) => member.dt_player_person)
+        const perMemberPoints = Number(result.team_points ?? 0) / 4
+        for (const member of members) {
+          const athlete = getAthlete(
+            member.player_id,
+            member.dt_player_person!.name,
+            member.dt_player_person!.gender,
+            result.mst_team.name,
+          )
+          athlete.points += perMemberPoints
+          athlete.relayRaces += 1
+          if (result.rank === 1) athlete.golds += 1
+          if (result.rank != null && result.rank <= 3) athlete.podiums += 1
+          if (result.is_meet_record) athlete.records += 1
+        }
+        if (result.is_meet_record) {
+          spotlights.push({
+            key: `relay-${result.id}`,
+            athleteId: members[0]?.player_id ?? null,
+            name: teamDisplayName(result.mst_team.name),
+            gender: result.mst_category.gender,
+            team: result.mst_team.name,
+            event: result.mst_category.name,
+            round: result.mst_event.round,
+            headline: 'リレー大会新！',
+            detail: `${result.time_display ?? '－'}・${result.rank != null ? `${result.rank}位` : '順位なし'}`,
+            tone: 'violet',
+            priority: -9,
+          })
+        }
+      }
+    }
+
+    const athletes = [...athleteMap.values()]
+    const topBy = (field: keyof Pick<DigestAthlete, 'points' | 'golds' | 'records' | 'relayRaces'>) =>
+      [...athletes].filter((athlete) => athlete[field] > 0).sort((a, b) => Number(b[field]) - Number(a[field]) || b.points - a.points)[0] ?? null
+    return {
+      raceCount: (includeIndividual ? sortedResults.length : 0) + (includeRelay ? relayResults.length : 0),
+      athleteCount: athletes.length,
+      totalPoints: athletes.reduce((sum, athlete) => sum + athlete.points, 0),
+      awards: [
+        { icon: '👑', label: '検索結果MVP', athlete: topBy('points'), metric: (athlete: DigestAthlete) => `${formatPoints(athlete.points)}pt` },
+        { icon: '🥇', label: '金メダルハンター', athlete: topBy('golds'), metric: (athlete: DigestAthlete) => `1位 ${athlete.golds}回` },
+        { icon: '⚡', label: '記録クラッシャー', athlete: topBy('records'), metric: (athlete: DigestAthlete) => `大会新 ${athlete.records}回` },
+        { icon: '🤝', label: 'リレー職人', athlete: topBy('relayRaces'), metric: (athlete: DigestAthlete) => `リレー ${athlete.relayRaces}本` },
+      ].filter((award) => award.athlete != null),
+      spotlights: spotlights.sort((a, b) => a.priority - b.priority).slice(0, 4),
+    }
+  }, [relayResults, resultFilter, sortedResults])
+
+  const STROKE_ICONS: Record<string, string> = { '自由形': '🏊', '背泳ぎ': '🔙', '平泳ぎ': '🐸', 'バタフライ': '🦋', '個人メドレー': '🌀', 'リレー': '🤝' }
+
+  const strokePills = useMemo(() => {
+    const pills: { name: string; count: number }[] = []
+    for (const s of ['自由形', '背泳ぎ', '平泳ぎ', 'バタフライ', '個人メドレー']) {
+      const c = sortedResults.filter((r) => r.mst_category.name.includes(s)).length
+      if (c > 0) pills.push({ name: s, count: c })
+    }
+    if (relayResults.length > 0) pills.push({ name: 'リレー', count: relayResults.length })
+    return pills
+  }, [sortedResults, relayResults])
+
+  const distChips = useMemo(() => {
+    if (!quickStroke) return []
+    const dists = new Map<string, number>()
+    if (quickStroke === 'リレー') {
+      relayResults.forEach((r) => {
+        const m = r.mst_category.name.match(/\d+×\d+m/)
+        if (m) dists.set(m[0], (dists.get(m[0]) ?? 0) + 1)
+      })
+    } else {
+      sortedResults.filter((r) => r.mst_category.name.includes(quickStroke)).forEach((r) => {
+        const m = r.mst_category.name.match(/\d+m/)
+        if (m) dists.set(m[0], (dists.get(m[0]) ?? 0) + 1)
+      })
+    }
+    return [...dists.entries()].sort(([a], [b]) => parseInt(a) - parseInt(b)).map(([dist, count]) => ({ dist, count }))
+  }, [quickStroke, sortedResults, relayResults])
+
+  const quickFilteredResults = useMemo(() => {
+    if (!quickStroke || quickStroke === 'リレー') return quickStroke === 'リレー' ? [] : sortedResults
+    return sortedResults.filter((r) => {
+      if (!r.mst_category.name.includes(quickStroke)) return false
+      if (quickDist && !r.mst_category.name.includes(quickDist)) return false
+      return true
+    })
+  }, [quickStroke, quickDist, sortedResults])
+
+  const quickSortedRelayResults = useMemo(() => {
+    if (quickStroke !== null && quickStroke !== 'リレー') return []
+    if (!quickDist) return sortedRelayResults
+    return sortedRelayResults.filter((r) => r.mst_category.name.includes(quickDist))
+  }, [quickStroke, quickDist, sortedRelayResults])
+
+  const individualTable = quickFilteredResults.length > 0 && (
     <div>
       <div className="flex items-start justify-between mb-2 gap-2">
         <div>
@@ -2816,7 +2983,7 @@ export default function SearchApp({
           )}
         </div>
         <span className="text-xs text-slate-400 shrink-0 mt-0.5">
-          {sortedResults.length}件{sortedResults.length >= 500 ? '（上限）' : ''}
+          {quickFilteredResults.length}件{sortedResults.length >= 500 ? '（上限）' : ''}
         </span>
       </div>
       <div className="overflow-x-auto rounded-xl border border-sky-900/40">
@@ -2840,7 +3007,7 @@ export default function SearchApp({
             </tr>
           </thead>
           <tbody>
-            {sortedResults.map((r, i) => {
+            {quickFilteredResults.map((r, i) => {
               const isMale = r.dt_player_person.gender === '男子'
               return (
                 <tr
@@ -2859,7 +3026,7 @@ export default function SearchApp({
                 <td className={`px-3 py-2 text-xs whitespace-nowrap font-medium ${isMale ? 'text-sky-400' : 'text-red-500'}`}>
                   {genderDisplay(r.dt_player_person.gender)}
                 </td>
-                {vis('event') && <td className="px-3 py-2 text-slate-300 text-xs whitespace-nowrap">{r.mst_category.name}</td>}
+                {vis('event') && <td className="px-3 py-2 text-slate-300 text-xs whitespace-nowrap">{formatEventDisplay(r.mst_category.name)}</td>}
                 {vis('age') && <td className="px-3 py-2 text-white text-xs whitespace-nowrap">{r.mst_age.name}</td>}
                 {vis('time') && (
                   <td className="px-3 py-2 font-mono whitespace-nowrap text-white font-medium">
@@ -2932,11 +3099,11 @@ export default function SearchApp({
   )
 
   // ── Relay results table ──────────────────────────────────────
-  const relayTable = relayResults.length > 0 && (
+  const relayTable = quickSortedRelayResults.length > 0 && (
     <div className={resultFilter === 'all' ? 'mt-6' : ''}>
       <div className="flex items-start justify-between mb-2 gap-2">
         <span className="text-sm font-bold text-white">リレー成績</span>
-        <span className="text-xs text-slate-400 shrink-0 mt-0.5">{relayResults.length}件</span>
+        <span className="text-xs text-slate-400 shrink-0 mt-0.5">{quickSortedRelayResults.length}件</span>
       </div>
       <div className="overflow-x-auto rounded-xl border border-indigo-900/40">
         <table className="w-full text-sm" style={{ minWidth: '700px' }}>
@@ -2958,7 +3125,7 @@ export default function SearchApp({
             </tr>
           </thead>
           <tbody>
-            {sortedRelayResults.map((r, i) => {
+            {quickSortedRelayResults.map((r, i) => {
               const catGender = r.mst_category.gender
               const rowBg = catGender === '男子'
                 ? 'bg-sky-950/40 hover:bg-sky-900/40'
@@ -2975,7 +3142,7 @@ export default function SearchApp({
                   <td className="px-3 py-2 text-center text-slate-500 text-xs align-top">{i + 1}</td>
                   {relVis('relay_meet_round') && <td className="px-3 py-2 text-slate-400 text-xs text-center whitespace-nowrap align-top">第{r.mst_event.round}回</td>}
                   {relVis('relay_team') && <td className="px-3 py-2 text-slate-300 text-xs whitespace-nowrap align-top">{teamDisplayName(r.mst_team.name)}</td>}
-                  {relVis('relay_event') && <td className="px-3 py-2 text-slate-200 text-xs whitespace-nowrap align-top">{r.mst_category.name}</td>}
+                  {relVis('relay_event') && <td className="px-3 py-2 text-slate-200 text-xs whitespace-nowrap align-top">{formatEventDisplay(r.mst_category.name)}</td>}
                   {relVis('relay_gender') && <td className={`px-3 py-2 text-xs font-medium whitespace-nowrap align-top ${genderColor}`}>{catGender}</td>}
                   {relVis('relay_age') && <td className="px-3 py-2 text-white text-xs whitespace-nowrap align-top">{r.mst_age?.name ?? r.age_group_label ?? '－'}</td>}
                   {relVis('relay_time') && (
@@ -2984,37 +3151,47 @@ export default function SearchApp({
                     </td>
                   )}
                   <td className="px-3 py-2 align-top min-w-[280px]">
-                    <div className={`grid gap-x-3 gap-y-0 ${r.dt_player_relay.length <= 2 ? 'grid-cols-2' : r.dt_player_relay.length === 3 ? 'grid-cols-3' : 'grid-cols-4'}`}>
-                      {r.dt_player_relay.map((m) => {
-                        const isMemberMale = m.dt_player_person?.gender === '男子'
-                        const split = formatSplitTime(m.split_seconds)
-                        const diveStr = m.dive_time != null
-                          ? `(${m.dive_time.toFixed(2)})`
-                          : null
-                        const memberRecordBadge = m.is_world_record
-                          ? <span className="inline-block bg-purple-500/20 text-purple-300 text-xs px-1 rounded border border-purple-500/30">世界新</span>
-                          : m.is_japan_record
-                          ? <span className="inline-block bg-sky-500/20 text-sky-300 text-xs px-1 rounded border border-sky-500/30">日本新</span>
-                          : m.is_meet_record
-                          ? <span className="inline-block bg-amber-500/20 text-amber-300 text-xs px-1 rounded border border-amber-500/30">大会新</span>
-                          : null
-                        return (
-                          <div key={m.swim_order} className="flex flex-col min-w-0">
-                            <span
-                              className={`text-xs font-medium truncate cursor-pointer hover:underline transition-colors ${isMemberMale ? 'text-sky-300 hover:text-sky-100' : 'text-red-400 hover:text-red-200'}`}
-                              onClick={() => handleRelayMemberClick(m)}
-                            >
-                              {m.dt_player_person?.name ?? `ID:${m.player_id}`}
-                            </span>
-                            <span className="text-xs text-white font-mono">
-                              {split ?? ''}
-                              {diveStr && <span className="text-gray-400"> {diveStr}</span>}
-                              {memberRecordBadge && <span className="ml-1">{memberRecordBadge}</span>}
-                            </span>
-                          </div>
-                        )
-                      })}
-                    </div>
+                    {(() => {
+                      const isMedleyRelay = r.mst_category.name.includes('メドレー')
+                      const MEDLEY_STROKE_SHORT = ['バック', '平泳', 'バッタ', '自由形']
+                      return (
+                        <div className={`grid gap-x-3 gap-y-0 ${r.dt_player_relay.length <= 2 ? 'grid-cols-2' : r.dt_player_relay.length === 3 ? 'grid-cols-3' : 'grid-cols-4'}`}>
+                          {r.dt_player_relay.map((m) => {
+                            const isMemberMale = m.dt_player_person?.gender === '男子'
+                            const split = formatSplitTime(m.split_seconds)
+                            const diveStr = m.dive_time != null
+                              ? `(${m.dive_time.toFixed(2)})`
+                              : null
+                            const memberRecordBadge = m.is_world_record
+                              ? <span className="inline-block bg-purple-500/20 text-purple-300 text-xs px-1 rounded border border-purple-500/30">世界新</span>
+                              : m.is_japan_record
+                              ? <span className="inline-block bg-sky-500/20 text-sky-300 text-xs px-1 rounded border border-sky-500/30">日本新</span>
+                              : m.is_meet_record
+                              ? <span className="inline-block bg-amber-500/20 text-amber-300 text-xs px-1 rounded border border-amber-500/30">大会新</span>
+                              : null
+                            const strokeLabel = isMedleyRelay
+                              ? (MEDLEY_STROKE_SHORT[m.swim_order - 1] ?? '')
+                              : '自由形'
+                            return (
+                              <div key={m.swim_order} className="flex flex-col min-w-0">
+                                <span
+                                  className={`text-xs font-medium truncate cursor-pointer hover:underline transition-colors ${isMemberMale ? 'text-sky-300 hover:text-sky-100' : 'text-red-400 hover:text-red-200'}`}
+                                  onClick={() => handleRelayMemberClick(m)}
+                                >
+                                  {m.dt_player_person?.name ?? `ID:${m.player_id}`}
+                                </span>
+                                <span className="text-[9px] text-slate-500 font-medium leading-tight">{strokeLabel}</span>
+                                <span className="text-xs text-white font-mono">
+                                  {split ?? ''}
+                                  {diveStr && <span className="text-gray-400"> {diveStr}</span>}
+                                  {memberRecordBadge && <span className="ml-1">{memberRecordBadge}</span>}
+                                </span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )
+                    })()}
                   </td>
                   {relVis('relay_record') && (
                     <td className="px-3 py-2 text-center whitespace-nowrap align-top">
@@ -3076,10 +3253,11 @@ export default function SearchApp({
     { id: 'results', label: '競技結果', count: results.length + relayResults.length },
     { id: 'team', label: 'チーム順位' },
     { id: 'relay-optimize', label: 'リレー最適化', disabled: !meetId || !selectedTeam },
-    { id: 'athlete', label: '選手詳細', disabled: !athleteForHistory },
+    { id: 'athlete', label: '選手詳細' },
     { id: 'age-rank', label: '年代別順位' },
     { id: 'meet-records', label: '大会新一覧' },
     { id: 'disqualification', label: '失格/棄権一覧' },
+  { id: 'race-game', label: '🏊 レースゲーム' },
   ]
 
   const athleteAnalysis = useMemo(() => {
@@ -3176,7 +3354,7 @@ export default function SearchApp({
     const bestImprovement = improvementCandidates[0]
     if (bestImprovement?.improvement > 0) {
       insights.push({
-        title: `${bestImprovement.trend.event}が成長している競技`,
+        title: `${formatEventDisplay(bestImprovement.trend.event)}が成長している競技`,
         detail: `初回から最新記録まで${bestImprovement.improvement.toFixed(2)}秒短縮しています。`,
         tone: 'emerald',
       })
@@ -3192,7 +3370,7 @@ export default function SearchApp({
     ).filter((item) => item.gap > 0).sort((a, b) => a.gap - b.gap)
     if (recordCandidates[0]) {
       insights.push({
-        title: `大会新に最も近いのは${recordCandidates[0].event}`,
+        title: `大会新に最も近いのは${formatEventDisplay(recordCandidates[0].event)}`,
         detail: `これまでの最短差はあと${recordCandidates[0].gap.toFixed(2)}秒です。`,
         tone: recordCandidates[0].gap <= 1 ? 'amber' : 'cyan',
       })
@@ -3208,7 +3386,7 @@ export default function SearchApp({
       .sort((a, b) => a.range - b.range)[0]
     if (stableCandidate) {
       insights.push({
-        title: `${stableCandidate.trend.event}は記録が安定`,
+        title: `${formatEventDisplay(stableCandidate.trend.event)}は記録が安定`,
         detail: `${stableCandidate.trend.points.length}レースのタイム幅は${stableCandidate.range.toFixed(2)}秒です。`,
         tone: 'cyan',
       })
@@ -3305,7 +3483,7 @@ export default function SearchApp({
       if (records > 0) achievementParts.push(`大会新${records}回`)
       if (totalPoints > 0) achievementParts.push(`通算${formatPoints(totalPoints)}pt`)
       const achievementStr = achievementParts.length > 0 ? `（${achievementParts.join('・')}）` : ''
-      const bestEventStr = bestPodiumEvent ? `。得意種目は${formatEventDisplay(bestPodiumEvent[0])}（表彰台${bestPodiumEvent[1]}回）` : ''
+      const bestEventStr = bestPodiumEvent ? `。得意競技は${formatEventDisplay(bestPodiumEvent[0])}（表彰台${bestPodiumEvent[1]}回）` : ''
       careerSummary = `第${firstRound}回から${history.length}大会に参加${achievementStr}${bestEventStr}。`
     }
 
@@ -3509,8 +3687,8 @@ export default function SearchApp({
       {!athleteForHistory ? (
         <div className="flex flex-col items-center justify-center py-20 text-center">
           <span className="text-4xl mb-3">🏊</span>
-          <p className="text-sm font-medium text-slate-300">成績一覧から選手名を選択してください</p>
-          <p className="text-xs text-slate-600 mt-1">右サイドの簡易表示と選手詳細が同時に準備されます</p>
+          <p className="text-sm font-medium text-slate-300">検索から選手名を選択してください</p>
+          <p className="text-xs text-slate-600 mt-1">選手を選ぶと、選手カルテとライバル比較を表示します</p>
         </div>
       ) : historyLoading ? (
         <div className="flex items-center justify-center gap-2 py-16 text-slate-500 text-sm">
@@ -3692,8 +3870,8 @@ export default function SearchApp({
               {athleteAnalysis.heatmap.strokes.length > 0 && athleteAnalysis.heatmap.distances.length > 0 && (
                 <section className="mb-6 overflow-hidden rounded-2xl border border-slate-700 bg-slate-900/50">
                   <div className="border-b border-slate-700 bg-slate-800/60 px-4 py-3">
-                    <h3 className="font-bold text-slate-100">🗺️ 種目マップ</h3>
-                    <p className="mt-0.5 text-[10px] text-slate-400">各種目のベスト順位（短水路/長水路）</p>
+                    <h3 className="font-bold text-slate-100">🗺️ 競技マップ</h3>
+                    <p className="mt-0.5 text-[10px] text-slate-400">各競技のベスト順位（短水路/長水路）</p>
                   </div>
                   <div className="overflow-x-auto p-4">
                     <table className="min-w-max text-[11px]">
@@ -3980,7 +4158,7 @@ export default function SearchApp({
                     <section className="overflow-hidden rounded-2xl border border-indigo-700/50 bg-indigo-950/20">
                       <div className="border-b border-indigo-800/40 bg-gradient-to-r from-indigo-950/80 to-violet-950/60 px-4 py-3">
                         <h3 className="font-bold text-indigo-100">📊 パフォーマンス偏差値</h3>
-                        <p className="mt-0.5 text-[10px] text-indigo-300/70">同性・同年代・同種目の全参加者と比較</p>
+                        <p className="mt-0.5 text-[10px] text-indigo-300/70">同性・同年代・同競技の全参加者と比較</p>
                       </div>
                       <div className="p-4">
                         <div className="mb-4 flex items-center gap-4">
@@ -3996,11 +4174,11 @@ export default function SearchApp({
                           </div>
                         </div>
                         <div className="space-y-2">
-                          {athleteStats.slice(0, 5).map((stat) => {
+                          {athleteStats.slice(0, 5).map((stat, index) => {
                             const barWidth = Math.min(Math.max((stat.deviation - 30) / 40 * 100, 0), 100)
                             const barColor = stat.deviation >= 65 ? 'bg-amber-400' : stat.deviation >= 55 ? 'bg-sky-400' : stat.deviation >= 45 ? 'bg-slate-500' : 'bg-slate-600'
                             return (
-                              <div key={`${stat.event}|${stat.poolType}`} className="grid grid-cols-[1fr_48px] items-center gap-2 text-xs">
+                              <div key={`${stat.event}|${stat.poolType}|${stat.ageName}|${index}`} className="grid grid-cols-[1fr_48px] items-center gap-2 text-xs">
                                 <div>
                                   <div className="flex items-center justify-between gap-1 mb-0.5">
                                     <span className="text-white truncate">{formatEventDisplay(stat.event)}<span className="ml-1 text-slate-500 text-[9px]">({stat.poolType === '短水路' ? '短' : '長'})</span></span>
@@ -4017,14 +4195,14 @@ export default function SearchApp({
                         </div>
                       </div>
                     </section>
-                    {/* 種目別ランキング */}
+                    {/* 競技別ランキング */}
                     <section className="overflow-hidden rounded-2xl border border-rose-700/50 bg-rose-950/20">
                       <div className="border-b border-rose-800/40 bg-gradient-to-r from-rose-950/80 to-pink-950/60 px-4 py-3">
-                        <h3 className="font-bold text-rose-100">🏅 種目別ランキング</h3>
+                        <h3 className="font-bold text-rose-100">🏅 競技別ランキング</h3>
                         <p className="mt-0.5 text-[10px] text-rose-300/70">全大会を通じた自己ベストで同性・同年代と比較</p>
                       </div>
                       <div className="grid grid-cols-2 gap-2 p-4 sm:grid-cols-3">
-                        {athleteStats.map((stat) => {
+                        {athleteStats.map((stat, index) => {
                           const isGold = stat.overallRank === 1
                           const isSilver = stat.overallRank === 2
                           const isBronze = stat.overallRank === 3
@@ -4034,7 +4212,7 @@ export default function SearchApp({
                           const rankLabel = isGold ? '🥇 1位' : isSilver ? '🥈 2位' : isBronze ? '🥉 3位' : `${stat.overallRank}位`
                           const rankColor = isGold ? 'text-amber-300' : isSilver ? 'text-slate-300' : isBronze ? 'text-orange-400' : isTop10pct ? 'text-sky-300' : 'text-white'
                           return (
-                            <div key={`${stat.event}|${stat.poolType}`} className={`rounded-xl border ${borderCls} ${bgCls} p-2 text-center`}>
+                            <div key={`${stat.event}|${stat.poolType}|${stat.ageName}|${index}`} className={`rounded-xl border ${borderCls} ${bgCls} p-2 text-center`}>
                               <div className={`text-sm font-black ${rankColor}`}>{rankLabel}</div>
                               <div className="text-[10px] text-white mt-0.5 font-medium leading-tight">{formatEventDisplay(stat.event)}</div>
                               <div className="text-[9px] text-slate-400 mt-0.5">{stat.poolType === '短水路' ? '短' : '長'} · {stat.ageName}</div>
@@ -4296,7 +4474,7 @@ export default function SearchApp({
                                   title="年代別順位タブで同条件を表示"
                                 >
                                   <td className="px-4 py-2 text-sky-400">個人</td>
-                                  <td className="px-3 py-2 text-slate-200">{result.event}</td>
+                                  <td className="px-3 py-2 text-slate-200">{formatEventDisplay(result.event)}</td>
                                   <td className="px-3 py-2 text-slate-400">{result.age_group}</td>
                                   <td className="px-3 py-2 text-right font-mono text-white">
                                     {result.time_display != null ? (
@@ -4320,7 +4498,7 @@ export default function SearchApp({
                               {meet.relay.map((result, index) => (
                                 <tr key={`relay-${index}`} className="border-t border-slate-800">
                                   <td className="px-4 py-2 text-indigo-400">リレー</td>
-                                  <td className="px-3 py-2 text-slate-200">{result.event}</td>
+                                  <td className="px-3 py-2 text-slate-200">{formatEventDisplay(result.event)}</td>
                                   <td className="px-3 py-2 text-slate-400">{result.age_group ?? '－'}</td>
                                   <td className="px-3 py-2 text-right font-mono text-white">
                                     {result.time_display != null ? result.time_display
@@ -4471,7 +4649,7 @@ export default function SearchApp({
                                         )}
                                       </td>
                                       <td className="px-3 py-2 text-slate-400 whitespace-nowrap">第{r.round}回</td>
-                                      <td className="px-3 py-2 text-slate-200 whitespace-nowrap">{r.event}</td>
+                                      <td className="px-3 py-2 text-slate-200 whitespace-nowrap">{formatEventDisplay(r.event)}</td>
                                       <td className="px-3 py-2 text-slate-400 whitespace-nowrap">{r.age_group}</td>
                                       <td className="px-3 py-2 text-right font-mono text-white whitespace-nowrap">
                                         {r.time_display ?? '－'}
@@ -4591,6 +4769,69 @@ export default function SearchApp({
     })
   }, [ageRankResults, ageRankRelayResults])
 
+  const ageRankGenerationStats = useMemo(() => {
+    const generations = new Map<string, {
+      age: string
+      races: number
+      wins: number
+      podiums: number
+      records: number
+      points: number
+      athletes: Set<number>
+      athleteScores: Map<number, { name: string; team: string; points: number; wins: number; podiums: number; records: number }>
+    }>()
+    for (const result of ageRankResults) {
+      const age = result.mst_age?.name ?? '年齢区分なし'
+      const current = generations.get(age) ?? {
+        age, races: 0, wins: 0, podiums: 0, records: 0, points: 0,
+        athletes: new Set<number>(),
+        athleteScores: new Map(),
+      }
+      const athleteId = result.player_id
+      const points = Number(result.points ?? 0)
+      current.races += 1
+      current.wins += result.rank === 1 ? 1 : 0
+      current.podiums += result.rank != null && result.rank <= 3 ? 1 : 0
+      current.records += result.is_meet_record ? 1 : 0
+      current.points += points
+      current.athletes.add(athleteId)
+      const athlete = current.athleteScores.get(athleteId) ?? {
+        name: result.dt_player_person.name,
+        team: result.dt_player_person.mst_team.name,
+        points: 0,
+        wins: 0,
+        podiums: 0,
+        records: 0,
+      }
+      athlete.points += points
+      athlete.wins += result.rank === 1 ? 1 : 0
+      athlete.podiums += result.rank != null && result.rank <= 3 ? 1 : 0
+      athlete.records += result.is_meet_record ? 1 : 0
+      current.athleteScores.set(athleteId, athlete)
+      generations.set(age, current)
+    }
+    return [...generations.values()]
+      .map((generation) => ({
+        ...generation,
+        athleteCount: generation.athletes.size,
+        mvp: [...generation.athleteScores.values()].sort((a, b) =>
+          b.points - a.points || b.wins - a.wins || b.podiums - a.podiums || a.name.localeCompare(b.name, 'ja')
+        )[0],
+      }))
+      .sort((a, b) => {
+        const ageA = Number(a.age.match(/\d+/)?.[0] ?? 999)
+        const ageB = Number(b.age.match(/\d+/)?.[0] ?? 999)
+        return ageA - ageB || a.age.localeCompare(b.age, 'ja')
+      })
+  }, [ageRankResults])
+  const ageRankMaxRaces = Math.max(1, ...ageRankGenerationStats.map((generation) => generation.races))
+  const ageRankHottestGeneration = [...ageRankGenerationStats].sort((a, b) =>
+    b.races - a.races || b.athleteCount - a.athleteCount
+  )[0]
+  const ageRankRecordGeneration = [...ageRankGenerationStats].sort((a, b) =>
+    b.records - a.records || b.wins - a.wins
+  )[0]
+
   const ageRankAllEventsView = (
     <div>
       <div className="mb-4 flex items-end justify-between gap-3">
@@ -4600,6 +4841,76 @@ export default function SearchApp({
         </div>
         <span className="shrink-0 text-xs text-slate-400">{ageRankResults.length + ageRankRelayResults.length}件</span>
       </div>
+      {ageRankGenerationStats.length > 0 && (
+        <div className="mb-5 space-y-4">
+          <section className="overflow-hidden rounded-2xl border border-emerald-500/30 bg-gradient-to-br from-emerald-950/80 via-slate-950 to-cyan-950/70">
+            <div className="border-b border-emerald-500/20 px-4 py-3">
+              <h3 className="font-bold text-white">🌊 年代別パワーマップ</h3>
+              <p className="mt-0.5 text-[11px] text-emerald-200/60">長いバーほど出場レースが多い、今大会の熱い世代です</p>
+            </div>
+            <div className="grid gap-2 p-4 sm:grid-cols-2">
+              {ageRankGenerationStats.map((generation) => (
+                <div key={generation.age} className="rounded-xl border border-white/5 bg-black/20 px-3 py-2.5">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <span className="font-bold text-emerald-100">{generation.age}</span>
+                    <span className="text-[10px] text-slate-400">
+                      {generation.athleteCount}名・{generation.races}レース
+                    </span>
+                  </div>
+                  <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-cyan-400 to-sky-400"
+                      style={{ width: `${Math.max(8, (generation.races / ageRankMaxRaces) * 100)}%` }}
+                    />
+                  </div>
+                  <div className="mt-2 flex gap-3 text-[10px]">
+                    <span className="text-amber-300">🥇 {generation.wins}</span>
+                    <span className="text-orange-200">表彰台 {generation.podiums}</span>
+                    <span className="text-fuchsia-300">大会新 {generation.records}</span>
+                    <span className="ml-auto text-cyan-200">{formatPoints(generation.points)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            {ageRankHottestGeneration && (
+              <div className="rounded-xl border border-orange-500/30 bg-gradient-to-br from-orange-950/70 to-slate-950 p-4">
+                <p className="text-[11px] font-bold text-orange-300">🔥 今大会で最も熱い世代</p>
+                <p className="mt-1 text-xl font-black text-white">{ageRankHottestGeneration.age}</p>
+                <p className="mt-1 text-xs text-slate-300">{ageRankHottestGeneration.athleteCount}名が{ageRankHottestGeneration.races}レースに挑戦</p>
+              </div>
+            )}
+            {ageRankRecordGeneration && ageRankRecordGeneration.records > 0 && (
+              <div className="rounded-xl border border-fuchsia-500/30 bg-gradient-to-br from-fuchsia-950/70 to-slate-950 p-4">
+                <p className="text-[11px] font-bold text-fuchsia-300">⚡ 記録クラッシャー世代</p>
+                <p className="mt-1 text-xl font-black text-white">{ageRankRecordGeneration.age}</p>
+                <p className="mt-1 text-xs text-slate-300">大会新を{ageRankRecordGeneration.records}個更新</p>
+              </div>
+            )}
+          </div>
+
+          <section className="rounded-2xl border border-violet-500/30 bg-violet-950/20 p-4">
+            <div className="mb-3">
+              <h3 className="font-bold text-white">👑 世代MVP</h3>
+              <p className="mt-0.5 text-[11px] text-violet-200/60">各年齢区分で最も多く得点した選手</p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {ageRankGenerationStats.filter((generation) => generation.mvp).map((generation) => (
+                <div key={generation.age} className="rounded-xl border border-violet-400/15 bg-slate-950/60 p-3">
+                  <div className="text-[10px] font-bold text-violet-300">{generation.age}</div>
+                  <div className="mt-1 font-bold text-white">{generation.mvp.name}</div>
+                  <div className="mt-1 flex items-end justify-between gap-2">
+                    <span className="truncate text-[10px] text-slate-500">{teamDisplayName(generation.mvp.team)}</span>
+                    <span className="shrink-0 font-mono text-xs font-bold text-amber-300">{formatPoints(generation.mvp.points)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+      )}
       <div className="space-y-3">
         {ageRankEventSections.map((section) => {
           const closed = ageRankClosedEvents.has(section.key)
@@ -4629,35 +4940,75 @@ export default function SearchApp({
                 <span className="ml-auto text-xs text-slate-400">{count}件</span>
               </button>
               {!closed && section.type === '個人' && (
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[650px] text-xs">
-                    <thead className="text-slate-500">
-                      <tr>
-                        <th className="px-3 py-2 text-center">順位</th>
-                        <th className="px-3 py-2 text-left">選手名</th>
-                        <th className="px-3 py-2 text-left">性別</th>
-                        <th className="px-3 py-2 text-left">年齢区分</th>
-                        <th className="px-3 py-2 text-left">チーム</th>
-                        <th className="px-3 py-2 text-right">タイム</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {[...section.individual].sort((a, b) => (a.rank ?? 9999) - (b.rank ?? 9999)).map((result) => (
-                        <tr key={result.id} className="border-t border-slate-800 hover:bg-sky-950/40">
-                          <td className="px-3 py-2 text-center text-amber-300">{result.rank != null ? `${result.rank}位` : '－'}</td>
-                          <td className="px-3 py-2">
-                            <button type="button" onClick={() => handleAthleteClick(result)} className="font-medium text-sky-300 hover:underline">
-                              {result.dt_player_person.name}
-                            </button>
-                          </td>
-                          <td className="px-3 py-2 text-slate-300">{genderDisplay(result.dt_player_person.gender)}</td>
-                          <td className="px-3 py-2 text-slate-400">{result.mst_age?.name ?? '－'}</td>
-                          <td className="px-3 py-2 text-slate-300">{teamDisplayName(result.dt_player_person.mst_team.name)}</td>
-                          <td className="px-3 py-2 text-right font-mono text-white">{result.time_display ?? '－'}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                <div className="space-y-3 p-3">
+                  {[...new Map(section.individual.map((result) => {
+                    const gender = genderDisplay(result.dt_player_person.gender)
+                    const age = result.mst_age?.name ?? '年齢区分なし'
+                    const key = `${gender}:${age}`
+                    return [key, { key, gender, age }]
+                  })).values()]
+                    .sort((a, b) => {
+                      if (a.gender !== b.gender) return a.gender.localeCompare(b.gender, 'ja')
+                      return Number(a.age.match(/\d+/)?.[0] ?? 999) - Number(b.age.match(/\d+/)?.[0] ?? 999)
+                    })
+                    .map((division) => {
+                      const divisionResults = section.individual
+                        .filter((result) =>
+                          genderDisplay(result.dt_player_person.gender) === division.gender
+                          && (result.mst_age?.name ?? '年齢区分なし') === division.age
+                        )
+                        .sort((a, b) => (a.rank ?? 9999) - (b.rank ?? 9999))
+                      return (
+                        <div key={division.key} className="overflow-hidden rounded-xl border border-sky-800/30 bg-slate-950/40">
+                          <div className="flex items-center gap-2 border-b border-sky-900/40 bg-sky-950/40 px-3 py-2">
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${division.gender === '男子' ? 'bg-sky-500/15 text-sky-300' : 'bg-rose-500/15 text-rose-300'}`}>
+                              {division.gender}
+                            </span>
+                            <span className="font-bold text-white">{division.age}</span>
+                            <span className="ml-auto text-[10px] text-slate-500">{divisionResults.length}名</span>
+                          </div>
+                          <div className="grid gap-2 p-3 sm:grid-cols-3">
+                            {divisionResults.slice(0, 3).map((result, index) => (
+                              <button
+                                key={result.id}
+                                type="button"
+                                onClick={() => handleAthleteClick(result)}
+                                className={`rounded-lg border p-3 text-left transition hover:-translate-y-0.5 ${
+                                  index === 0
+                                    ? 'border-amber-400/40 bg-amber-500/10'
+                                    : index === 1
+                                      ? 'border-slate-400/30 bg-slate-400/10'
+                                      : 'border-orange-700/30 bg-orange-900/10'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <span className="text-lg">{index === 0 ? '🥇' : index === 1 ? '🥈' : '🥉'}</span>
+                                  <span className="font-mono text-sm font-bold text-white">{result.time_display ?? '－'}</span>
+                                </div>
+                                <div className="mt-2 font-bold text-sky-200">{result.dt_player_person.name}</div>
+                                <div className="mt-0.5 truncate text-[10px] text-slate-500">{teamDisplayName(result.dt_player_person.mst_team.name)}</div>
+                              </button>
+                            ))}
+                          </div>
+                          {divisionResults.length > 3 && (
+                            <div className="border-t border-slate-800 px-3 py-2 text-[11px] text-slate-400">
+                              {divisionResults.slice(3).map((result) => (
+                                <button
+                                  key={result.id}
+                                  type="button"
+                                  onClick={() => handleAthleteClick(result)}
+                                  className="mr-3 inline-flex items-center gap-1 py-1 hover:text-sky-300"
+                                >
+                                  <span>{result.rank ?? '－'}位</span>
+                                  <span>{result.dt_player_person.name}</span>
+                                  <span className="font-mono text-slate-500">{result.time_display ?? '－'}</span>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
                 </div>
               )}
               {!closed && section.type === 'リレー' && (
@@ -4695,9 +5046,72 @@ export default function SearchApp({
 
   // ── Results area ─────────────────────────────────────────────
   const resultsArea = (
-    <div className="h-full overflow-y-auto flex flex-col">
+    <div data-results-scroll className="h-full overflow-y-auto flex flex-col">
       {tournamentTitle}
       {glowingTabTitle}
+      {activeTab === 'results' && (
+        <div className="sticky top-0 z-20 shrink-0 bg-slate-900/95 backdrop-blur-sm border-b border-slate-700/50 px-3 py-2 space-y-1.5">
+          {/* 大会クイックセレクター */}
+          <div className="flex gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <button
+              type="button"
+              onClick={() => setMeetId(null)}
+              className={`flex-shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold border transition-colors ${!meetId ? 'bg-sky-500/20 border-sky-500/60 text-sky-300' : 'border-slate-600 text-slate-500 hover:text-slate-200 hover:border-slate-500'}`}
+            >
+              全大会
+            </button>
+            {meets.map((m) => {
+              const isLatest = m.round === Math.max(...meets.map((x) => x.round))
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => setMeetId(m.id)}
+                  className={`flex-shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold border transition-colors ${meetId === m.id ? 'bg-sky-500/20 border-sky-500/60 text-sky-300' : 'border-slate-600 text-slate-500 hover:text-slate-200 hover:border-slate-500'}`}
+                >
+                  {isLatest ? `★ 第${m.round}回` : `第${m.round}回`}
+                </button>
+              )
+            })}
+          </div>
+          {/* 種目ピル + 距離チップ */}
+          {strokePills.length > 0 && (
+            <div className="flex items-center gap-2">
+              <div className="flex gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {strokePills.map((p) => (
+                  <button
+                    key={p.name}
+                    type="button"
+                    onClick={() => { setQuickStroke(quickStroke === p.name ? null : p.name); setQuickDist(null) }}
+                    className={`flex-shrink-0 flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-bold border transition-colors ${quickStroke === p.name ? 'bg-cyan-500/15 border-cyan-500/60 text-cyan-300' : 'border-slate-600 text-slate-500 hover:text-slate-200 hover:border-slate-500'}`}
+                  >
+                    <span>{STROKE_ICONS[p.name] ?? ''}</span>
+                    <span>{p.name}</span>
+                    <span className="text-[9px] text-slate-500">{p.count}</span>
+                  </button>
+                ))}
+              </div>
+              {distChips.length > 0 && (
+                <>
+                  <div className="w-px h-4 bg-slate-700 shrink-0" />
+                  <div className="flex gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                    {distChips.map(({ dist }) => (
+                      <button
+                        key={dist}
+                        type="button"
+                        onClick={() => setQuickDist(quickDist === dist ? null : dist)}
+                        className={`flex-shrink-0 rounded px-2 py-1 text-[11px] font-bold border transition-colors ${quickDist === dist ? 'bg-slate-600 border-slate-400 text-white' : 'border-slate-700 text-slate-500 hover:text-slate-300 hover:border-slate-500'}`}
+                      >
+                        {dist}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
       <div className="flex-1 p-4 pb-24">
         {loading && activeTab === 'results' && (
           <div className="flex items-center justify-center gap-2 py-12 text-slate-500 text-sm">
@@ -4832,6 +5246,61 @@ export default function SearchApp({
               }
               const meetPlayerScores = [...scoreMap.values()].sort((a, b) => b.points - a.points)
               const meetPlayerTotal = meetPlayerScores.reduce((sum, a) => sum + a.points, 0)
+              const sortedCurrentStandings = [...teamStandings].sort((a, b) => (a.rank ?? 9999) - (b.rank ?? 9999))
+              const championStanding = sortedCurrentStandings.find((standing) => standing.rank === 1) ?? sortedCurrentStandings[0]
+              const currentRank = currentStanding?.rank ?? null
+              const nextStanding = currentRank != null && currentRank > 1
+                ? sortedCurrentStandings.find((standing) => standing.rank === currentRank - 1)
+                : null
+              const chasingStanding = currentRank != null
+                ? sortedCurrentStandings.find((standing) => standing.rank === currentRank + 1)
+                : null
+              const pointsToNext = nextStanding
+                ? Math.max(0, Number(nextStanding.total_points ?? 0) - currentTotal)
+                : 0
+              const leadOverChaser = chasingStanding
+                ? Math.max(0, currentTotal - Number(chasingStanding.total_points ?? 0))
+                : 0
+              const previousRoundByTeam = new Map<string, TeamStanding>()
+              for (const standing of teamHistoryStandings) {
+                const round = standing.mst_event?.round ?? 0
+                if (round >= (currentMeet?.round ?? 0)) continue
+                const key = normalizeOptionName(standing.mst_team.name)
+                const existing = previousRoundByTeam.get(key)
+                if (!existing || (existing.mst_event?.round ?? 0) < round) previousRoundByTeam.set(key, standing)
+              }
+              const biggestClimber = sortedCurrentStandings
+                .map((standing) => {
+                  const previous = previousRoundByTeam.get(normalizeOptionName(standing.mst_team.name))
+                  const change = previous?.rank != null && standing.rank != null ? previous.rank - standing.rank : 0
+                  return { standing, previous, change }
+                })
+                .sort((a, b) => b.change - a.change || (a.standing.rank ?? 9999) - (b.standing.rank ?? 9999))[0]
+              const individualTeamPoints = results.reduce((sum, result) => {
+                const rankPoints = result.rank != null && result.rank >= 1 && result.rank <= 10 ? 11 - result.rank : 0
+                return sum + rankPoints + (result.is_meet_record ? 10 : 0) + (result.is_japan_record ? 10 : 0) + (result.is_world_record ? 10 : 0)
+              }, 0)
+              const relayTeamPoints = relayResults.reduce((sum, result) => {
+                const rankPoints = result.rank != null && result.rank >= 1 && result.rank <= 10 ? 11 - result.rank : 0
+                return sum + rankPoints + (result.is_meet_record ? 10 : 0)
+              }, 0)
+              const calculatedTeamPoints = individualTeamPoints + relayTeamPoints
+              const relayRatio = calculatedTeamPoints > 0 ? relayTeamPoints / calculatedTeamPoints : 0
+              const maleRatio = currentTotal > 0 ? Number(currentStanding?.male_points ?? 0) / currentTotal : 0
+              const femaleRatio = currentTotal > 0 ? Number(currentStanding?.female_points ?? 0) / currentTotal : 0
+              const mixedRatio = currentTotal > 0 ? Number(currentStanding?.mixed_points ?? 0) / currentTotal : 0
+              const topPlayerRatio = meetPlayerTotal > 0 ? (meetPlayerScores[0]?.points ?? 0) / meetPlayerTotal : 0
+              const teamType = relayRatio >= 0.32
+                ? { icon: '🤝', title: 'リレー王国', description: `得点の${Math.round(relayRatio * 100)}%をリレーで獲得。チームの絆が最大の武器！`, color: 'from-violet-950/80 to-indigo-950/60 border-violet-500/40' }
+                : femaleRatio >= 0.55
+                  ? { icon: '🌹', title: '女子パワー型', description: `女子得点が全体の${Math.round(femaleRatio * 100)}%。華やかにチームを牽引！`, color: 'from-rose-950/80 to-fuchsia-950/60 border-rose-500/40' }
+                  : maleRatio >= 0.65
+                    ? { icon: '⚡', title: '男子突破型', description: `男子得点が全体の${Math.round(maleRatio * 100)}%。力強く順位を押し上げる！`, color: 'from-sky-950/80 to-cyan-950/60 border-sky-500/40' }
+                    : mixedRatio >= 0.2
+                      ? { icon: '🧩', title: '混合の絆型', description: `混合得点が全体の${Math.round(mixedRatio * 100)}%。男女の力を合わせて勝負！`, color: 'from-purple-950/80 to-fuchsia-950/60 border-purple-500/40' }
+                      : topPlayerRatio <= 0.22 && meetPlayerScores.length >= 6
+                        ? { icon: '🌊', title: '全員得点型', description: `${meetPlayerScores.length}名で得点を積み上げる、層の厚いチーム！`, color: 'from-emerald-950/80 to-teal-950/60 border-emerald-500/40' }
+                        : { icon: '⚖️', title: 'バランス型', description: '男女・個人・リレーで着実に得点を重ねる総合力タイプ！', color: 'from-amber-950/80 to-orange-950/60 border-amber-500/40' }
               if (!currentStanding) {
                 return (
                   <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-10 text-center">
@@ -4860,6 +5329,66 @@ export default function SearchApp({
                     </div>
 
                     <div className="space-y-5">
+                    <section className="overflow-hidden rounded-2xl border border-amber-500/35 bg-gradient-to-br from-amber-950/70 via-slate-950 to-orange-950/50 shadow-xl shadow-amber-950/20">
+                      <div className="border-b border-amber-500/20 px-4 py-3">
+                        <h3 className="font-bold text-white">🎉 第{currentMeet.round}回 チーム順位ダイジェスト</h3>
+                        <p className="mt-0.5 text-[11px] text-amber-200/60">優勝争い、逆転条件、チームの個性をまとめてチェック</p>
+                      </div>
+                      <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
+                        <div className="rounded-xl border border-yellow-400/30 bg-yellow-500/10 p-3">
+                          <p className="text-[10px] font-bold text-yellow-300">🏆 総合チャンピオン</p>
+                          <p className="mt-1 truncate text-lg font-black text-white">{teamDisplayName(championStanding?.mst_team.name ?? '－')}</p>
+                          <p className="mt-1 font-mono text-xs font-bold text-yellow-200">{formatPoints(Number(championStanding?.total_points ?? 0))}pt</p>
+                        </div>
+                        <div className="rounded-xl border border-cyan-400/30 bg-cyan-500/10 p-3">
+                          <p className="text-[10px] font-bold text-cyan-300">{currentStanding.rank === 1 ? '🛡️ 首位防衛ライン' : '🎯 次の順位まで'}</p>
+                          {currentStanding.rank === 1 ? (
+                            <>
+                              <p className="mt-1 text-lg font-black text-white">リード {formatPoints(leadOverChaser)}pt</p>
+                              <p className="mt-1 truncate text-[10px] text-slate-400">2位 {teamDisplayName(chasingStanding?.mst_team.name ?? '－')}との差</p>
+                            </>
+                          ) : (
+                            <>
+                              <p className="mt-1 text-lg font-black text-white">あと {formatPoints(pointsToNext)}pt</p>
+                              <p className="mt-1 truncate text-[10px] text-slate-400">{nextStanding?.rank ?? '－'}位 {teamDisplayName(nextStanding?.mst_team.name ?? '－')}を追走中</p>
+                            </>
+                          )}
+                        </div>
+                        <div className={`rounded-xl border bg-gradient-to-br p-3 ${teamType.color}`}>
+                          <p className="text-[10px] font-bold text-slate-300">{teamType.icon} チームタイプ診断</p>
+                          <p className="mt-1 text-lg font-black text-white">{teamType.title}</p>
+                          <p className="mt-1 text-[10px] leading-relaxed text-slate-300">{teamType.description}</p>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={!meetPlayerScores[0]}
+                          onClick={() => {
+                            const mvp = meetPlayerScores[0]
+                            if (!mvp) return
+                            fetchAthleteHistory(mvp.playerId, mvp.name, mvp.gender, selectedTeam?.name ?? '')
+                            setMobileDrawerOpen(true)
+                          }}
+                          className="rounded-xl border border-emerald-400/30 bg-emerald-500/10 p-3 text-left transition hover:-translate-y-0.5 hover:bg-emerald-500/15 disabled:cursor-default"
+                        >
+                          <p className="text-[10px] font-bold text-emerald-300">👑 チームMVP</p>
+                          <p className="mt-1 truncate text-lg font-black text-white">{meetPlayerScores[0]?.name ?? '－'}</p>
+                          <p className="mt-1 font-mono text-xs font-bold text-emerald-200">{formatPoints(meetPlayerScores[0]?.points ?? 0)}pt</p>
+                        </button>
+                      </div>
+                      {biggestClimber && biggestClimber.change > 0 && (
+                        <div className="border-t border-amber-500/15 bg-black/15 px-4 py-3">
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                            <span className="font-bold text-orange-300">🚀 急上昇チーム</span>
+                            <span className="font-bold text-white">{teamDisplayName(biggestClimber.standing.mst_team.name)}</span>
+                            <span className="text-emerald-300">前回から {biggestClimber.change}ランクアップ</span>
+                            <span className="text-slate-500">
+                              {biggestClimber.previous?.rank ?? '－'}位 → {biggestClimber.standing.rank ?? '－'}位
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                    </section>
+
                     <div>
                     <TeamProgressChart standings={historyRows} overlayTeams={overlayTeamStandings} selectedRound={currentMeet.round} onRoundSelect={(id) => setMeetId(id)} teamName={focusTeamDisplayName} />
                     {rankChange != null && (
@@ -5630,7 +6159,7 @@ export default function SearchApp({
                               >
                                 {teamDisplayName(entry.team)}
                               </td>
-                              <td className="whitespace-nowrap px-3 py-2 text-slate-200">{entry.event}</td>
+                              <td className="whitespace-nowrap px-3 py-2 text-slate-200">{formatEventDisplay(entry.event)}</td>
                               <td className="whitespace-nowrap px-3 py-2 text-slate-300">{entry.ageGroup || '－'}</td>
                               <td className={`whitespace-nowrap px-3 py-2 ${statusColor}`}>{statusLabel}</td>
                               <td className="whitespace-nowrap px-3 py-2 font-mono text-amber-300">
@@ -5648,6 +6177,10 @@ export default function SearchApp({
               })()
             )}
           </div>
+        )}
+
+        {activeTab === 'race-game' && (
+          <RaceGame results={sortedResults} />
         )}
 
         {activeTab === 'athlete' && athleteDetailPanel}
@@ -6011,7 +6544,7 @@ export default function SearchApp({
                       <tbody>
                         {panelRecs.map((r, i) => (
                           <tr key={r.id} className={`border-t border-amber-900/20 ${i % 2 === 0 ? 'bg-amber-950/20' : ''}`}>
-                            <td className="px-3 py-2 font-medium text-white leading-tight whitespace-nowrap">{r.event} {r.distance}</td>
+                            <td className="px-3 py-2 font-medium text-white leading-tight whitespace-nowrap">{formatEventDisplay(`${r.event} ${r.distance}`)}</td>
                             <td className="px-2 py-2 text-white whitespace-nowrap">{ageGroupLabel(r.age_group)}</td>
                             <td className="px-2 py-2 text-right font-mono font-bold text-amber-300 whitespace-nowrap">{r.record}</td>
                             <td className="px-2 py-2 text-right text-white whitespace-nowrap">{r.established_date ?? '－'}</td>
@@ -6030,6 +6563,10 @@ export default function SearchApp({
   )
 
   // ── Layout ────────────────────────────────────────────────────
+  const roundValues = meets.map((meet) => meet.round)
+  const siteRoundRange = roundValues.length > 0
+    ? `第${Math.min(...roundValues)}回～第${Math.max(...roundValues)}回`
+    : ''
   return (
     <div className="flex h-full flex-col overflow-hidden [&_.text-slate-300]:text-white [&_.text-slate-400]:text-white [&_.text-slate-500]:text-white">
       <div className="md:hidden shrink-0 grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 border-b border-sky-900/50 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 px-2 py-2 shadow-lg">
@@ -6040,9 +6577,12 @@ export default function SearchApp({
         >
           検索
         </button>
-        <span className="truncate text-center text-xs font-bold tracking-wide bg-gradient-to-r from-sky-400 via-cyan-300 to-blue-400 bg-clip-text text-transparent">
-          セントラルマスターズ
-        </span>
+        <div className="min-w-0 text-center">
+          <div className="truncate text-xs font-bold tracking-wide bg-gradient-to-r from-sky-400 via-cyan-300 to-blue-400 bg-clip-text text-transparent">
+            セントラルマスターズ
+          </div>
+          {siteRoundRange && <div className="mt-0.5 text-[9px] font-bold text-sky-300/80">{siteRoundRange}</div>}
+        </div>
         <button
           type="button"
           onClick={() => setMobileDrawerOpen(true)}
@@ -6090,148 +6630,402 @@ export default function SearchApp({
           className="shrink-0 bg-slate-800 border-l border-slate-700 flex flex-col"
           style={{ width: rightW }}
         >
-          <div className="px-4 py-2.5 border-b border-slate-700/80 shrink-0 flex items-center justify-between">
-            {activeTab === 'meet-records' ? (
-              <span className="text-xs font-black tracking-wide bg-gradient-to-r from-amber-400 via-yellow-100 to-amber-400 bg-clip-text text-transparent drop-shadow-[0_0_8px_rgba(251,191,36,0.6)]">
-                大会新一覧
-              </span>
-            ) : (
-              <span className="text-xs font-bold text-white tracking-wide">過去レース記録</span>
-            )}
-          </div>
+          {/* Header: 2-tab strip for results, plain title for other tabs */}
+          {activeTab === 'results' ? (
+            <div className="flex shrink-0 border-b border-slate-700/80">
+              <button
+                type="button"
+                onClick={() => setRightPanelTab('digest')}
+                className={`flex-1 px-3 py-2.5 text-xs font-bold transition-colors border-b-2 ${rightPanelTab === 'digest' ? 'border-cyan-400 text-cyan-300' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+              >
+                🎉 統計
+              </button>
+              <button
+                type="button"
+                onClick={() => setRightPanelTab('history')}
+                className={`flex-1 px-3 py-2.5 text-xs font-bold transition-colors border-b-2 ${rightPanelTab === 'history' ? 'border-sky-400 text-sky-300' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+              >
+                🏊 過去記録
+              </button>
+            </div>
+          ) : (
+            <div className="px-4 py-2.5 border-b border-slate-700/80 shrink-0 flex items-center justify-between">
+              {activeTab === 'meet-records' ? (
+                <span className="text-xs font-black tracking-wide bg-gradient-to-r from-amber-400 via-yellow-100 to-amber-400 bg-clip-text text-transparent drop-shadow-[0_0_8px_rgba(251,191,36,0.6)]">
+                  大会新一覧
+                </span>
+              ) : (
+                <span className="text-xs font-bold text-white tracking-wide">過去レース記録</span>
+              )}
+            </div>
+          )}
+
           <div className="overflow-y-auto flex-1">
-            {activeTab === 'meet-records' ? meetRecordSidePanel : !athleteForHistory ? (
-              <div className="p-4 text-xs text-slate-600">
-                <p className="mt-1 leading-relaxed">選手名をクリックすると<br />全大会の記録が表示されます</p>
-              </div>
-            ) : (
-              <div className="p-3 flex flex-col gap-5">
-                {/* 選手名・チーム名ヘッダー */}
-                <div>
-                  <div className="flex items-baseline gap-2 flex-wrap">
-                    <span className="text-base font-bold text-white">{athleteForHistory.name}</span>
-                    <span className={`text-xs font-medium ${athleteForHistory.gender === '男子' ? 'text-sky-400' : 'text-rose-400'}`}>
-                      {genderDisplay(athleteForHistory.gender)}
-                    </span>
-                  </div>
-                  {athleteForHistory.teamName && (
-                    <div className="text-xs text-slate-400 mt-0.5">{teamDisplayName(athleteForHistory.teamName)}</div>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => { setMobileDrawerOpen(false); handleTabChange('athlete') }}
-                    className="mt-3 w-full rounded-lg bg-sky-600 hover:bg-sky-500 px-3 py-2 text-xs font-bold text-white transition-colors"
-                  >
-                    詳しく見る →
-                  </button>
-                </div>
-                {historyLoading ? (
-                  <div className="flex items-center justify-center gap-2 py-10 text-slate-500 text-xs">
-                    <span className="w-3 h-3 border-2 border-sky-500 border-t-transparent rounded-full animate-spin" />
-                    読込中…
-                  </div>
-                ) : !athleteHistory || athleteHistory.length === 0 ? (
-                  <div className="py-4 text-xs text-slate-500">記録が見つかりません</div>
-                ) : athleteHistory.map((meet) => {
-                  const indPts = meet.individual.reduce((s, r) => s + (r.points ?? 0), 0)
-                  const relPts = meet.relay.reduce((s, r) => s + (r.team_points ?? 0) / 4, 0)
-                  const totalPts = indPts + relPts
-                  return (
-                    <div key={meet.round}>
-                      <div className="flex items-center justify-between mb-1.5">
-                        <span className="text-xs font-bold text-sky-400">第{meet.round}回（{meet.pool_type}）</span>
-                        {totalPts > 0 && (
-                          <span className="text-xs text-amber-400 font-medium shrink-0 ml-1">{formatPoints(totalPts)}pt</span>
-                        )}
+            {/* Results tab — 統計 */}
+            {activeTab === 'results' && rightPanelTab === 'digest' && (
+              <div className="p-3 flex flex-col gap-4">
+                {(individualTable || relayTable) ? (
+                  <>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="rounded-lg border border-slate-700/60 bg-slate-900/40 px-2 py-3 text-center">
+                        <div className="text-lg font-black text-white">{resultsDigest.athleteCount}</div>
+                        <div className="text-[9px] text-slate-500">参加選手</div>
                       </div>
-                      {/* 個人・リレー結果テーブル */}
-                      <table className="w-full text-xs">
-                        <tbody>
-                          {meet.individual.map((r, i) => (
-                            <tr
-                              key={i}
-                              className="group border-t border-slate-700/40 cursor-pointer hover:bg-amber-900/35 hover:ring-1 hover:ring-inset hover:ring-amber-400/60 hover:shadow-[inset_0_0_16px_rgba(251,191,36,0.14)] transition-all"
-                              onClick={() => handleJumpToAgeRank(meet.round, r.event, r.age_group)}
-                              title="年代別順位タブで同条件を表示"
-                            >
-                              <td className="py-1 pr-1 text-slate-100 group-hover:text-amber-200 transition-colors">{r.event}</td>
-                              <td className="py-1 pr-2 text-white whitespace-nowrap">{r.age_group}</td>
-                              <td className="py-1 pr-2 font-mono text-white whitespace-nowrap">
-                                {r.time_display != null ? (
-                                  <>{r.time_display}{r.is_meet_record && <span className="ml-1 text-amber-400">★</span>}</>
-                                ) : r.disqualification_code != null ? (
-                                  <span className="text-red-400 font-semibold text-xs">失格 {r.disqualification_code}</span>
-                                ) : r.is_withdrawal ? (
-                                  <span className="text-slate-400 text-xs">棄権</span>
-                                ) : '－'}
-                              </td>
-                              <td className="py-1 text-right whitespace-nowrap">
-                                {r.rank === 1 ? (
-                                  <span className="inline-flex items-center gap-0.5 justify-end">
-                                    <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-gradient-to-b from-yellow-200 to-amber-500 text-[7px] font-black text-amber-900 shadow shadow-amber-400/60">1</span>
-                                    <span className="text-amber-300 font-semibold">1位</span>
-                                  </span>
-                                ) : r.rank === 2 ? (
-                                  <span className="inline-flex items-center gap-0.5 justify-end">
-                                    <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-gradient-to-b from-slate-200 to-slate-400 text-[7px] font-black text-slate-700 shadow shadow-slate-400/60">2</span>
-                                    <span className="text-slate-300 font-semibold">2位</span>
-                                  </span>
-                                ) : r.rank === 3 ? (
-                                  <span className="inline-flex items-center gap-0.5 justify-end">
-                                    <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-gradient-to-b from-amber-500 to-amber-800 text-[7px] font-black text-amber-100 shadow shadow-amber-700/60">3</span>
-                                    <span className="text-amber-600 font-semibold">3位</span>
-                                  </span>
-                                ) : r.rank != null ? (
-                                  <span className="text-white">{r.rank}位</span>
-                                ) : null}
-                              </td>
-                            </tr>
-                          ))}
-                          {meet.relay.map((r, i) => (
-                            <tr
-                              key={`relay-${i}`}
-                              className="group border-t border-slate-700/40 cursor-pointer hover:bg-amber-900/35 hover:ring-1 hover:ring-inset hover:ring-amber-400/60 hover:shadow-[inset_0_0_16px_rgba(251,191,36,0.14)] transition-all"
-                              onClick={() => handleJumpToAgeRank(meet.round, r.event, r.age_group ?? '', true)}
-                              title="年代別順位タブで同条件を表示"
-                            >
-                              <td className="py-1 pr-1 text-indigo-300 group-hover:text-amber-200 transition-colors">R {r.event}</td>
-                              <td className="py-1 pr-2 text-white whitespace-nowrap">{r.age_group ?? ''}</td>
-                              <td className="py-1 pr-2 font-mono text-white whitespace-nowrap">
-                                {r.time_display != null ? r.time_display
-                                  : r.disqualification_code != null ? (
+                      <div className="rounded-lg border border-slate-700/60 bg-slate-900/40 px-2 py-3 text-center">
+                        <div className="text-lg font-black text-white">{resultsDigest.raceCount}</div>
+                        <div className="text-[9px] text-slate-500">レース</div>
+                      </div>
+                      <div className="rounded-lg border border-slate-700/60 bg-slate-900/40 px-2 py-3 text-center">
+                        <div className="text-lg font-black text-amber-300">{formatPoints(resultsDigest.totalPoints)}pt</div>
+                        <div className="text-[9px] text-slate-500">合計得点</div>
+                      </div>
+                    </div>
+                    {resultsDigest.awards.length > 0 && (
+                      <div>
+                        <h3 className="mb-2 text-[10px] font-bold text-fuchsia-300 uppercase tracking-wider">🏆 今回の称号</h3>
+                        <div className="grid grid-cols-2 gap-2">
+                          {resultsDigest.awards.map((award) => {
+                            const athlete = award.athlete
+                            if (!athlete) return null
+                            return (
+                              <button
+                                key={award.label}
+                                type="button"
+                                onClick={() => fetchAthleteHistory(athlete.id, athlete.name, athlete.gender, athlete.team)}
+                                className="group rounded-lg border border-fuchsia-800/40 bg-gradient-to-br from-slate-900/80 to-fuchsia-950/30 p-2.5 text-left transition-all hover:border-fuchsia-500/70"
+                              >
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-base">{award.icon}</span>
+                                  <span className="text-[9px] font-bold text-fuchsia-300">{award.label}</span>
+                                </div>
+                                <div className="mt-1.5 truncate text-xs font-black text-white">{athlete.name}</div>
+                                <div className="mt-0.5 text-[10px] font-bold text-amber-300">{award.metric(athlete)}</div>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    {resultsDigest.spotlights.length > 0 && (
+                      <div>
+                        <h3 className="mb-2 text-[10px] font-bold text-cyan-300 uppercase tracking-wider">✨ 注目レース</h3>
+                        <div className="flex flex-col gap-2">
+                          {resultsDigest.spotlights.map((spotlight) => {
+                            const colors = spotlight.tone === 'amber'
+                              ? 'border-amber-700/50 bg-amber-950/25 text-amber-300'
+                              : spotlight.tone === 'violet'
+                                ? 'border-violet-700/50 bg-violet-950/25 text-violet-300'
+                                : 'border-cyan-700/50 bg-cyan-950/25 text-cyan-300'
+                            return (
+                              <button
+                                key={spotlight.key}
+                                type="button"
+                                disabled={spotlight.athleteId == null}
+                                onClick={() => {
+                                  if (spotlight.athleteId == null) return
+                                  fetchAthleteHistory(spotlight.athleteId, spotlight.name, spotlight.gender, spotlight.team)
+                                }}
+                                className={`rounded-lg border p-2.5 text-left transition-colors hover:bg-slate-800/60 disabled:cursor-default ${colors}`}
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-xs font-black">{spotlight.headline}</span>
+                                  <span className="shrink-0 text-[9px] text-white">第{spotlight.round}回</span>
+                                </div>
+                                <div className="mt-1 text-xs font-bold text-white">{spotlight.name}</div>
+                                <div className="mt-0.5 text-[9px] text-slate-300">{formatEventDisplay(spotlight.event)}・{spotlight.detail}</div>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="py-10 text-center text-xs text-slate-600">
+                    <p className="mb-2 text-2xl">🔍</p>
+                    <p>検索すると統計が表示されます</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Results tab — 過去記録 */}
+            {activeTab === 'results' && rightPanelTab === 'history' && (
+              <div className="flex flex-col">
+                <button
+                  type="button"
+                  onClick={() => setRightPanelTab('digest')}
+                  className="flex shrink-0 items-center gap-1.5 px-3 py-2 border-b border-slate-700/60 text-xs font-bold text-cyan-400 hover:bg-slate-700/40 transition-colors"
+                >
+                  ← 統計に戻る
+                </button>
+                {!athleteForHistory ? (
+                  <div className="p-4 text-xs text-slate-600">
+                    <p className="mt-1 leading-relaxed">選手名をクリックすると<br />全大会の記録が表示されます</p>
+                  </div>
+                ) : (
+                  <div className="p-3 flex flex-col gap-5">
+                    <div>
+                      <div className="flex items-baseline gap-2 flex-wrap">
+                        <span className="text-base font-bold text-white">{athleteForHistory.name}</span>
+                        <span className={`text-xs font-medium ${athleteForHistory.gender === '男子' ? 'text-sky-400' : 'text-rose-400'}`}>
+                          {genderDisplay(athleteForHistory.gender)}
+                        </span>
+                      </div>
+                      {athleteForHistory.teamName && (
+                        <div className="text-xs text-slate-400 mt-0.5">{teamDisplayName(athleteForHistory.teamName)}</div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleTabChange('athlete')}
+                        className="mt-3 w-full rounded-lg bg-sky-600 hover:bg-sky-500 px-3 py-2 text-xs font-bold text-white transition-colors"
+                      >
+                        詳しく見る →
+                      </button>
+                    </div>
+                    {historyLoading ? (
+                      <div className="flex items-center justify-center gap-2 py-10 text-slate-500 text-xs">
+                        <span className="w-3 h-3 border-2 border-sky-500 border-t-transparent rounded-full animate-spin" />
+                        読込中…
+                      </div>
+                    ) : !athleteHistory || athleteHistory.length === 0 ? (
+                      <div className="py-4 text-xs text-slate-500">記録が見つかりません</div>
+                    ) : athleteHistory.map((meet) => {
+                      const indPts = meet.individual.reduce((s, r) => s + (r.points ?? 0), 0)
+                      const relPts = meet.relay.reduce((s, r) => s + (r.team_points ?? 0) / 4, 0)
+                      const totalPts = indPts + relPts
+                      return (
+                        <div key={meet.round}>
+                          <div className="flex items-center justify-between mb-1.5">
+                            <span className="text-xs font-bold text-sky-400">第{meet.round}回（{meet.pool_type}）</span>
+                            {totalPts > 0 && (
+                              <span className="text-xs text-amber-400 font-medium shrink-0 ml-1">{formatPoints(totalPts)}pt</span>
+                            )}
+                          </div>
+                          <table className="w-full text-xs">
+                            <tbody>
+                              {meet.individual.map((r, i) => (
+                                <tr
+                                  key={i}
+                                  className="group border-t border-slate-700/40 cursor-pointer hover:bg-amber-900/35 hover:ring-1 hover:ring-inset hover:ring-amber-400/60 hover:shadow-[inset_0_0_16px_rgba(251,191,36,0.14)] transition-all"
+                                  onClick={() => handleJumpToAgeRank(meet.round, r.event, r.age_group)}
+                                  title="年代別順位タブで同条件を表示"
+                                >
+                                  <td className="py-1 pr-1 text-slate-100 group-hover:text-amber-200 transition-colors">{formatEventDisplay(r.event)}</td>
+                                  <td className="py-1 pr-2 text-white whitespace-nowrap">{r.age_group}</td>
+                                  <td className="py-1 pr-2 font-mono text-white whitespace-nowrap">
+                                    {r.time_display != null ? (
+                                      <>{r.time_display}{r.is_meet_record && <span className="ml-1 text-amber-400">★</span>}</>
+                                    ) : r.disqualification_code != null ? (
+                                      <span className="text-red-400 font-semibold text-xs">失格 {r.disqualification_code}</span>
+                                    ) : r.is_withdrawal ? (
+                                      <span className="text-slate-400 text-xs">棄権</span>
+                                    ) : '－'}
+                                  </td>
+                                  <td className="py-1 text-right whitespace-nowrap">
+                                    {r.rank === 1 ? (
+                                      <span className="inline-flex items-center gap-0.5 justify-end">
+                                        <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-gradient-to-b from-yellow-200 to-amber-500 text-[7px] font-black text-amber-900 shadow shadow-amber-400/60">1</span>
+                                        <span className="text-amber-300 font-semibold">1位</span>
+                                      </span>
+                                    ) : r.rank === 2 ? (
+                                      <span className="inline-flex items-center gap-0.5 justify-end">
+                                        <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-gradient-to-b from-slate-200 to-slate-400 text-[7px] font-black text-slate-700 shadow shadow-slate-400/60">2</span>
+                                        <span className="text-slate-300 font-semibold">2位</span>
+                                      </span>
+                                    ) : r.rank === 3 ? (
+                                      <span className="inline-flex items-center gap-0.5 justify-end">
+                                        <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-gradient-to-b from-amber-500 to-amber-800 text-[7px] font-black text-amber-100 shadow shadow-amber-700/60">3</span>
+                                        <span className="text-amber-600 font-semibold">3位</span>
+                                      </span>
+                                    ) : r.rank != null ? (
+                                      <span className="text-white">{r.rank}位</span>
+                                    ) : null}
+                                  </td>
+                                </tr>
+                              ))}
+                              {meet.relay.map((r, i) => (
+                                <tr
+                                  key={`relay-${i}`}
+                                  className="group border-t border-slate-700/40 cursor-pointer hover:bg-amber-900/35 hover:ring-1 hover:ring-inset hover:ring-amber-400/60 hover:shadow-[inset_0_0_16px_rgba(251,191,36,0.14)] transition-all"
+                                  onClick={() => handleJumpToAgeRank(meet.round, r.event, r.age_group ?? '', true)}
+                                  title="年代別順位タブで同条件を表示"
+                                >
+                                  <td className="py-1 pr-1 text-indigo-300 group-hover:text-amber-200 transition-colors">R {formatEventDisplay(r.event)}</td>
+                                  <td className="py-1 pr-2 text-white whitespace-nowrap">{r.age_group ?? ''}</td>
+                                  <td className="py-1 pr-2 font-mono text-white whitespace-nowrap">
+                                    {r.time_display != null ? r.time_display
+                                      : r.disqualification_code != null ? (
+                                        <span className="text-red-400 font-semibold text-xs">失格 {r.disqualification_code}</span>
+                                      ) : r.is_withdrawal ? (
+                                        <span className="text-slate-400 text-xs">棄権</span>
+                                      ) : '－'}
+                                  </td>
+                                  <td className="py-1 text-right whitespace-nowrap">
+                                    {r.rank === 1 ? (
+                                      <span className="inline-flex items-center gap-0.5 justify-end">
+                                        <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-gradient-to-b from-yellow-200 to-amber-500 text-[7px] font-black text-amber-900 shadow shadow-amber-400/60">1</span>
+                                        <span className="text-amber-300 font-semibold">1位</span>
+                                      </span>
+                                    ) : r.rank === 2 ? (
+                                      <span className="inline-flex items-center gap-0.5 justify-end">
+                                        <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-gradient-to-b from-slate-200 to-slate-400 text-[7px] font-black text-slate-700 shadow shadow-slate-400/60">2</span>
+                                        <span className="text-slate-300 font-semibold">2位</span>
+                                      </span>
+                                    ) : r.rank === 3 ? (
+                                      <span className="inline-flex items-center gap-0.5 justify-end">
+                                        <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-gradient-to-b from-amber-500 to-amber-800 text-[7px] font-black text-amber-100 shadow shadow-amber-700/60">3</span>
+                                        <span className="text-amber-600 font-semibold">3位</span>
+                                      </span>
+                                    ) : r.rank != null ? (
+                                      <span className="text-white">{r.rank}位</span>
+                                    ) : null}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Other tabs — meet records or athlete history */}
+            {activeTab !== 'results' && (
+              activeTab === 'meet-records' ? meetRecordSidePanel : !athleteForHistory ? (
+                <div className="p-4 text-xs text-slate-600">
+                  <p className="mt-1 leading-relaxed">選手名をクリックすると<br />全大会の記録が表示されます</p>
+                </div>
+              ) : (
+                <div className="p-3 flex flex-col gap-5">
+                  <div>
+                    <div className="flex items-baseline gap-2 flex-wrap">
+                      <span className="text-base font-bold text-white">{athleteForHistory.name}</span>
+                      <span className={`text-xs font-medium ${athleteForHistory.gender === '男子' ? 'text-sky-400' : 'text-rose-400'}`}>
+                        {genderDisplay(athleteForHistory.gender)}
+                      </span>
+                    </div>
+                    {athleteForHistory.teamName && (
+                      <div className="text-xs text-slate-400 mt-0.5">{teamDisplayName(athleteForHistory.teamName)}</div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => { setMobileDrawerOpen(false); handleTabChange('athlete') }}
+                      className="mt-3 w-full rounded-lg bg-sky-600 hover:bg-sky-500 px-3 py-2 text-xs font-bold text-white transition-colors"
+                    >
+                      詳しく見る →
+                    </button>
+                  </div>
+                  {historyLoading ? (
+                    <div className="flex items-center justify-center gap-2 py-10 text-slate-500 text-xs">
+                      <span className="w-3 h-3 border-2 border-sky-500 border-t-transparent rounded-full animate-spin" />
+                      読込中…
+                    </div>
+                  ) : !athleteHistory || athleteHistory.length === 0 ? (
+                    <div className="py-4 text-xs text-slate-500">記録が見つかりません</div>
+                  ) : athleteHistory.map((meet) => {
+                    const indPts = meet.individual.reduce((s, r) => s + (r.points ?? 0), 0)
+                    const relPts = meet.relay.reduce((s, r) => s + (r.team_points ?? 0) / 4, 0)
+                    const totalPts = indPts + relPts
+                    return (
+                      <div key={meet.round}>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className="text-xs font-bold text-sky-400">第{meet.round}回（{meet.pool_type}）</span>
+                          {totalPts > 0 && (
+                            <span className="text-xs text-amber-400 font-medium shrink-0 ml-1">{formatPoints(totalPts)}pt</span>
+                          )}
+                        </div>
+                        <table className="w-full text-xs">
+                          <tbody>
+                            {meet.individual.map((r, i) => (
+                              <tr
+                                key={i}
+                                className="group border-t border-slate-700/40 cursor-pointer hover:bg-amber-900/35 hover:ring-1 hover:ring-inset hover:ring-amber-400/60 hover:shadow-[inset_0_0_16px_rgba(251,191,36,0.14)] transition-all"
+                                onClick={() => handleJumpToAgeRank(meet.round, r.event, r.age_group)}
+                                title="年代別順位タブで同条件を表示"
+                              >
+                                <td className="py-1 pr-1 text-slate-100 group-hover:text-amber-200 transition-colors">{formatEventDisplay(r.event)}</td>
+                                <td className="py-1 pr-2 text-white whitespace-nowrap">{r.age_group}</td>
+                                <td className="py-1 pr-2 font-mono text-white whitespace-nowrap">
+                                  {r.time_display != null ? (
+                                    <>{r.time_display}{r.is_meet_record && <span className="ml-1 text-amber-400">★</span>}</>
+                                  ) : r.disqualification_code != null ? (
                                     <span className="text-red-400 font-semibold text-xs">失格 {r.disqualification_code}</span>
                                   ) : r.is_withdrawal ? (
                                     <span className="text-slate-400 text-xs">棄権</span>
                                   ) : '－'}
-                              </td>
-                              <td className="py-1 text-right whitespace-nowrap">
-                                {r.rank === 1 ? (
-                                  <span className="inline-flex items-center gap-0.5 justify-end">
-                                    <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-gradient-to-b from-yellow-200 to-amber-500 text-[7px] font-black text-amber-900 shadow shadow-amber-400/60">1</span>
-                                    <span className="text-amber-300 font-semibold">1位</span>
-                                  </span>
-                                ) : r.rank === 2 ? (
-                                  <span className="inline-flex items-center gap-0.5 justify-end">
-                                    <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-gradient-to-b from-slate-200 to-slate-400 text-[7px] font-black text-slate-700 shadow shadow-slate-400/60">2</span>
-                                    <span className="text-slate-300 font-semibold">2位</span>
-                                  </span>
-                                ) : r.rank === 3 ? (
-                                  <span className="inline-flex items-center gap-0.5 justify-end">
-                                    <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-gradient-to-b from-amber-500 to-amber-800 text-[7px] font-black text-amber-100 shadow shadow-amber-700/60">3</span>
-                                    <span className="text-amber-600 font-semibold">3位</span>
-                                  </span>
-                                ) : r.rank != null ? (
-                                  <span className="text-white">{r.rank}位</span>
-                                ) : null}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )
-                })}
-              </div>
+                                </td>
+                                <td className="py-1 text-right whitespace-nowrap">
+                                  {r.rank === 1 ? (
+                                    <span className="inline-flex items-center gap-0.5 justify-end">
+                                      <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-gradient-to-b from-yellow-200 to-amber-500 text-[7px] font-black text-amber-900 shadow shadow-amber-400/60">1</span>
+                                      <span className="text-amber-300 font-semibold">1位</span>
+                                    </span>
+                                  ) : r.rank === 2 ? (
+                                    <span className="inline-flex items-center gap-0.5 justify-end">
+                                      <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-gradient-to-b from-slate-200 to-slate-400 text-[7px] font-black text-slate-700 shadow shadow-slate-400/60">2</span>
+                                      <span className="text-slate-300 font-semibold">2位</span>
+                                    </span>
+                                  ) : r.rank === 3 ? (
+                                    <span className="inline-flex items-center gap-0.5 justify-end">
+                                      <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-gradient-to-b from-amber-500 to-amber-800 text-[7px] font-black text-amber-100 shadow shadow-amber-700/60">3</span>
+                                      <span className="text-amber-600 font-semibold">3位</span>
+                                    </span>
+                                  ) : r.rank != null ? (
+                                    <span className="text-white">{r.rank}位</span>
+                                  ) : null}
+                                </td>
+                              </tr>
+                            ))}
+                            {meet.relay.map((r, i) => (
+                              <tr
+                                key={`relay-${i}`}
+                                className="group border-t border-slate-700/40 cursor-pointer hover:bg-amber-900/35 hover:ring-1 hover:ring-inset hover:ring-amber-400/60 hover:shadow-[inset_0_0_16px_rgba(251,191,36,0.14)] transition-all"
+                                onClick={() => handleJumpToAgeRank(meet.round, r.event, r.age_group ?? '', true)}
+                                title="年代別順位タブで同条件を表示"
+                              >
+                                <td className="py-1 pr-1 text-indigo-300 group-hover:text-amber-200 transition-colors">R {formatEventDisplay(r.event)}</td>
+                                <td className="py-1 pr-2 text-white whitespace-nowrap">{r.age_group ?? ''}</td>
+                                <td className="py-1 pr-2 font-mono text-white whitespace-nowrap">
+                                  {r.time_display != null ? r.time_display
+                                    : r.disqualification_code != null ? (
+                                      <span className="text-red-400 font-semibold text-xs">失格 {r.disqualification_code}</span>
+                                    ) : r.is_withdrawal ? (
+                                      <span className="text-slate-400 text-xs">棄権</span>
+                                    ) : '－'}
+                                </td>
+                                <td className="py-1 text-right whitespace-nowrap">
+                                  {r.rank === 1 ? (
+                                    <span className="inline-flex items-center gap-0.5 justify-end">
+                                      <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-gradient-to-b from-yellow-200 to-amber-500 text-[7px] font-black text-amber-900 shadow shadow-amber-400/60">1</span>
+                                      <span className="text-amber-300 font-semibold">1位</span>
+                                    </span>
+                                  ) : r.rank === 2 ? (
+                                    <span className="inline-flex items-center gap-0.5 justify-end">
+                                      <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-gradient-to-b from-slate-200 to-slate-400 text-[7px] font-black text-slate-700 shadow shadow-slate-400/60">2</span>
+                                      <span className="text-slate-300 font-semibold">2位</span>
+                                    </span>
+                                  ) : r.rank === 3 ? (
+                                    <span className="inline-flex items-center gap-0.5 justify-end">
+                                      <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-gradient-to-b from-amber-500 to-amber-800 text-[7px] font-black text-amber-100 shadow shadow-amber-700/60">3</span>
+                                      <span className="text-amber-600 font-semibold">3位</span>
+                                    </span>
+                                  ) : r.rank != null ? (
+                                    <span className="text-white">{r.rank}位</span>
+                                  ) : null}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )
+                  })}
+                </div>
+              )
             )}
           </div>
         </div>
@@ -6349,7 +7143,7 @@ export default function SearchApp({
                               }}
                               title="年代別順位で同条件を表示"
                             >
-                              <td className="py-1.5 pr-1 text-slate-100">{r.event}</td>
+                              <td className="py-1.5 pr-1 text-slate-100">{formatEventDisplay(r.event)}</td>
                               <td className="py-1.5 pr-2 text-slate-300 whitespace-nowrap">{r.age_group}</td>
                               <td className="py-1.5 pr-2 font-mono text-white whitespace-nowrap">
                                 {r.time_display != null ? (
@@ -6375,7 +7169,7 @@ export default function SearchApp({
                               }}
                               title="年代別順位で同条件を表示"
                             >
-                              <td className="py-1.5 pr-1 text-indigo-300">R {r.event}</td>
+                              <td className="py-1.5 pr-1 text-indigo-300">R {formatEventDisplay(r.event)}</td>
                               <td className="py-1.5 pr-2 text-slate-300 whitespace-nowrap">{r.age_group ?? ''}</td>
                               <td className="py-1.5 pr-2 font-mono text-white whitespace-nowrap">
                                 {r.time_display != null ? r.time_display
@@ -6404,13 +7198,31 @@ export default function SearchApp({
       {/* Compact shared back action that does not cover the analysis content. */}
       {canGoBack && (
         <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] md:px-6">
-          <div className="pointer-events-auto rounded-xl border border-sky-700/70 bg-slate-900/95 p-1 shadow-2xl shadow-black/60 backdrop-blur">
+          <div className="pointer-events-auto flex items-center gap-1 rounded-xl border border-sky-700/70 bg-slate-900/95 p-1 shadow-2xl shadow-black/60 backdrop-blur">
             <button
               type="button"
               onClick={() => window.history.back()}
               className="rounded-lg bg-sky-950/80 px-4 py-1.5 text-xs font-bold text-sky-200 transition-colors hover:bg-sky-900 hover:text-white"
             >
               ← 戻る
+            </button>
+            <button
+              type="button"
+              onClick={() => setMobileFilterOpen(true)}
+              className="rounded-lg bg-indigo-950/80 px-4 py-1.5 text-xs font-bold text-indigo-200 transition-colors hover:bg-indigo-900 hover:text-white md:hidden"
+            >
+              検索
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                document.querySelectorAll<HTMLElement>('[data-results-scroll]').forEach((element) => {
+                  element.scrollTo({ top: 0, behavior: 'smooth' })
+                })
+              }}
+              className="rounded-lg bg-emerald-950/80 px-4 py-1.5 text-xs font-bold text-emerald-200 transition-colors hover:bg-emerald-900 hover:text-white"
+            >
+              ↑ 一番上へ
             </button>
           </div>
         </div>

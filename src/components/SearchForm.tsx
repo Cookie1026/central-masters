@@ -1,4 +1,5 @@
 import type { EventOption, AgeGroupOption, TeamOption } from '@/types'
+import { formatEventDisplay } from '@/lib/event-display'
 
 interface Props {
   events: EventOption[]
@@ -59,7 +60,7 @@ export default function SearchForm({ events, ageGroups, teams, current }: Props)
           <select name="event" defaultValue={current.event ?? ''} className={selectClass}>
             <option value="">すべて</option>
             {events.map((e) => (
-              <option key={e.id} value={String(e.id)}>{e.name}</option>
+              <option key={e.id} value={String(e.id)}>{formatEventDisplay(e.name)}</option>
             ))}
           </select>
         </div>
