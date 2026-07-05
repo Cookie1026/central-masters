@@ -6,6 +6,8 @@ import { getAthleteProfile } from '@/data/athlete-profiles'
 import AllMeetsAnalysis from '@/components/AllMeetsAnalysis'
 import RelayOptimizer from '@/components/RelayOptimizer'
 import RaceGame from '@/components/RaceGame'
+import TodoTab from '@/components/TodoTab'
+import ProgramViewer from '@/components/ProgramViewer'
 import { formatEventDisplay } from '@/lib/event-display'
 import type {
   MeetOption,
@@ -32,7 +34,7 @@ interface Props {
 
 type TeamGroup = TeamOption & { ids: number[]; displayName: string }
 type EventGroup = EventOption & { ids: number[] }
-type MainTab = 'results' | 'team' | 'relay-optimize' | 'athlete' | 'age-rank' | 'meet-records' | 'disqualification' | 'race-game'
+type MainTab = 'results' | 'team' | 'relay-optimize' | 'athlete' | 'age-rank' | 'meet-records' | 'disqualification' | 'race-game' | 'todo' | 'program'
 type ResultFilter = 'all' | 'individual' | 'relay'
 type AthleteDetailView = 'overview' | 'trends' | 'records' | 'age-rank-indiv'
 type DisqualificationRule = {
@@ -1584,7 +1586,7 @@ export default function SearchApp({
       const params = new URLSearchParams(window.location.search)
       const tab = params.get('tab')
       const legacyResultTabs = ['all', 'individual', 'relay']
-      const validTabs: MainTab[] = ['results', 'team', 'relay-optimize', 'athlete', 'age-rank', 'meet-records', 'disqualification']
+      const validTabs: MainTab[] = ['results', 'team', 'relay-optimize', 'athlete', 'age-rank', 'meet-records', 'disqualification', 'race-game', 'todo', 'program']
       const restoredTab: MainTab = validTabs.includes(tab as MainTab)
         ? (tab as MainTab)
         : legacyResultTabs.includes(tab ?? '')
@@ -2670,6 +2672,7 @@ export default function SearchApp({
     'relay-optimize': { title: 'リレー最適化', icon: '🔁', glow: 'from-indigo-300 via-cyan-100 to-emerald-300', accent: 'bg-indigo-400' },
     'age-rank': { title: '年代別順位', icon: '📊', glow: 'from-emerald-300 via-cyan-100 to-sky-300', accent: 'bg-emerald-400' },
     disqualification: { title: '失格/棄権一覧', icon: '⚠️', glow: 'from-red-300 via-amber-100 to-orange-300', accent: 'bg-red-400' },
+    todo: { title: 'ToDo', icon: '✅', glow: 'from-violet-300 via-fuchsia-100 to-amber-300', accent: 'bg-violet-400' },
   }
   const activeTabPageTitle = tabPageTitles[activeTab]
   const titleTeamStanding = activeTab === 'team' && selectedTeam
@@ -3257,7 +3260,9 @@ export default function SearchApp({
     { id: 'age-rank', label: '年代別順位' },
     { id: 'meet-records', label: '大会新一覧' },
     { id: 'disqualification', label: '失格/棄権一覧' },
-  { id: 'race-game', label: '🏊 レースゲーム' },
+    { id: 'race-game', label: '🏊 レースゲーム' },
+    { id: 'program', label: '📄 プログラム' },
+    { id: 'todo', label: '✅ ToDo' },
   ]
 
   const athleteAnalysis = useMemo(() => {
@@ -6180,7 +6185,15 @@ export default function SearchApp({
         )}
 
         {activeTab === 'race-game' && (
-          <RaceGame results={sortedResults} />
+          <RaceGame teams={teams} />
+        )}
+
+        {activeTab === 'program' && (
+          <ProgramViewer />
+        )}
+
+        {activeTab === 'todo' && (
+          <TodoTab />
         )}
 
         {activeTab === 'athlete' && athleteDetailPanel}
