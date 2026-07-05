@@ -1,9 +1,13 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
-import { IndividualResult } from '@/types'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { TeamOption } from '@/types'
 
-const RACER_COLORS = ['#38bdf8', '#f472b6', '#4ade80', '#fb923c', '#a78bfa']
+const RACER_COLORS = [
+  '#38bdf8', '#f472b6', '#4ade80', '#fb923c', '#a78bfa',
+  '#facc15', '#2dd4bf', '#e879f9', '#94a3b8', '#fb7185',
+]
+const MAX_RACERS = 10
 const SPEED_OPTIONS = [1, 2, 5, 10, 20] as const
 
 type StrokeFilter = 'all' | '自由形' | '背泳ぎ' | '平泳ぎ' | 'バタフライ'
@@ -26,6 +30,37 @@ interface Racer {
   timeSeconds: number
   color: string
   rank: number | null
+  resultId: number
+  meetRound: number
+  ageName: string
+}
+
+interface RaceCandidate {
+  id: number
+  event_id: number
+  player_id: number
+  category_id: number
+  age_id: number
+  race_number: number | null
+  rank: number | null
+  time_seconds: number | string | null
+  time_display: string | null
+  is_meet_record: boolean
+  dt_player_person: {
+    id: number
+    name: string
+    gender: string
+    team_id: number
+    mst_team: { id: number; name: string }
+  }
+  mst_category: {
+    id: number
+    name: string
+    stroke: string | null
+    distance: number | null
+  }
+  mst_age: { id: number; name: string }
+  mst_event: { id: number; round: number; pool_type: string }
 }
 
 interface FinishResult {
@@ -56,18 +91,28 @@ function getStrokeEmoji(stroke: string): string {
   }
 }
 
-interface Props {
-  results: IndividualResult[]
+function teamDisplayName(name: string): string {
+  return name.replace(/^セ・/, '')
 }
 
-export default function RaceGame({ results }: Props) {
+interface Props {
+  teams: TeamOption[]
+}
+
+export default function RaceGame({ teams }: Props) {
   const [selectedRacers, setSelectedRacers] = useState<Racer[]>([])
   const [strokeFilter, setStrokeFilter] = useState<StrokeFilter>('all')
-  const [teamFilter, setTeamFilter]       = useState('')
+  const [teamFilter, setTeamFilter]       = useState(0)
   const [nameFilter, setNameFilter]       = useState('')
+  const [candidates, setCandidates]       = useState<RaceCandidate[]>([])
+  const [candidatesLoading, setCandidatesLoading] = useState(false)
+  const [candidateError, setCandidateError] = useState('')
+  const [quickMode, setQuickMode] = useState<'browse' | 'records' | 'near' | 'actual'>('browse')
+  const [expandedPlayers, setExpandedPlayers] = useState<Set<number>>(new Set())
   const [poolLength, setPoolLength]       = useState<25 | 50>(25)
   const [speed, setSpeed]                 = useState<typeof SPEED_OPTIONS[number]>(5)
-  const [phase, setPhase]                 = useState<'setup' | 'running' | 'finished'>('setup')
+  const [raceControl, setRaceControl]     = useState<'step' | 'full'>('step')
+  const [phase, setPhase]                 = useState<'setup' | 'running' | 'paused' | 'finished'>('setup')
   const [finishResults, setFinishResults] = useState<FinishResult[]>([])
   const [elapsedDisplay, setElapsedDisplay] = useState(0)
 
@@ -79,56 +124,106 @@ export default function RaceGame({ results }: Props) {
   const speedRef     = useRef(speed)
   const poolRef      = useRef(poolLength)
   const startTsRef   = useRef(0)
+  const elapsedBaseRef = useRef(0)
   const animRef      = useRef(0)
   const runningRef   = useRef(false)
 
-  // Unique teams from results
-  const teams = [...new Set(
-    results.map((r) => r.dt_player_person?.mst_team?.name ?? '').filter(Boolean)
-  )].sort()
+  const sortedTeams = useMemo(
+    () => [...teams].sort((a, b) => teamDisplayName(a.name).localeCompare(teamDisplayName(b.name), 'ja')),
+    [teams],
+  )
+  const baseRacer = selectedRacers[0] ?? null
 
-  // Filtered candidates
-  const candidates = results.filter((r) => {
-    const name   = r.dt_player_person?.name ?? ''
-    const team   = r.dt_player_person?.mst_team?.name ?? ''
-    const stroke = (r.mst_category as unknown as { stroke?: string })?.stroke ?? ''
-    const t      = Number(r.time_seconds ?? 0)
-    if (!t) return false
-    if (strokeFilter !== 'all' && stroke !== strokeFilter) return false
-    if (teamFilter && team !== teamFilter) return false
-    if (nameFilter && !name.includes(nameFilter)) return false
-    return true
-  })
-
-  // Auto-detect pool length from first result
-  useEffect(() => {
-    if (results.length > 0) {
-      const pt = (results[0].mst_event as { pool_type?: string })?.pool_type ?? ''
-      const pl: 25 | 50 = pt === '長水路' ? 50 : 25
-      setPoolLength(pl)
-      poolRef.current = pl
+  const loadCandidates = useCallback(async (
+    mode: 'browse' | 'records' | 'near' | 'actual' = quickMode,
+  ) => {
+    if ((mode === 'near' || mode === 'actual') && !baseRacer) return
+    setCandidatesLoading(true)
+    setCandidateError('')
+    const params = new URLSearchParams({ mode })
+    if (mode === 'browse' || mode === 'records') {
+      params.set('stroke', strokeFilter)
+      if (teamFilter) params.set('teamId', String(teamFilter))
+      if (nameFilter.trim()) params.set('name', nameFilter.trim())
+    } else if (baseRacer) {
+      params.set('baseResultId', String(baseRacer.resultId))
     }
-  }, [results])
+    try {
+      const response = await fetch(`/api/race-game?${params}`)
+      const data = await response.json() as { results?: RaceCandidate[]; error?: string }
+      if (!response.ok || data.error) throw new Error(data.error ?? '候補を取得できませんでした')
+      setCandidates(data.results ?? [])
+      setExpandedPlayers(new Set())
+    } catch (error) {
+      setCandidates([])
+      setCandidateError(error instanceof Error ? error.message : '候補を取得できませんでした')
+    } finally {
+      setCandidatesLoading(false)
+    }
+  }, [baseRacer, nameFilter, quickMode, strokeFilter, teamFilter])
 
-  const addRacer = (r: IndividualResult) => {
-    if (selectedRacers.length >= 5) return
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadCandidates(quickMode), nameFilter ? 250 : 0)
+    return () => window.clearTimeout(timer)
+  }, [loadCandidates, nameFilter, quickMode, strokeFilter, teamFilter])
+
+  const groupedCandidates = useMemo(() => {
+    const groups = new Map<number, { player: RaceCandidate['dt_player_person']; results: RaceCandidate[] }>()
+    for (const result of candidates) {
+      const current = groups.get(result.player_id)
+      if (current) current.results.push(result)
+      else groups.set(result.player_id, { player: result.dt_player_person, results: [result] })
+    }
+    return [...groups.values()]
+      .map((group) => ({
+        ...group,
+        results: group.results.sort((a, b) =>
+          b.mst_event.round - a.mst_event.round || Number(a.time_seconds) - Number(b.time_seconds)
+        ),
+      }))
+      .sort((a, b) => a.player.name.localeCompare(b.player.name, 'ja'))
+  }, [candidates])
+
+  const addRacer = (r: RaceCandidate) => {
+    if (selectedRacers.length >= MAX_RACERS) return
     const key = `${r.id}`
     if (selectedRacers.some((s) => s.key === key)) return
-    const dist = r.mst_category?.distance ?? poolLength
+    const dist = r.mst_category.distance ?? poolLength
     const t    = Number(r.time_seconds ?? 0)
     if (!t || !dist) return
     const racer: Racer = {
       key,
-      name:         r.dt_player_person?.name ?? '?',
-      team:         r.dt_player_person?.mst_team?.name ?? '',
-      categoryName: r.mst_category?.name ?? '',
-      stroke:       (r.mst_category as unknown as { stroke?: string })?.stroke ?? '',
+      name:         r.dt_player_person.name,
+      team:         r.dt_player_person.mst_team.name,
+      categoryName: r.mst_category.name,
+      stroke:       r.mst_category.stroke ?? '',
       distance:     dist,
       timeSeconds:  t,
       color:        RACER_COLORS[selectedRacers.length],
       rank:         r.rank,
+      resultId:     r.id,
+      meetRound:    r.mst_event.round,
+      ageName:      r.mst_age.name,
     }
     setSelectedRacers((prev) => [...prev, racer])
+  }
+
+  const addActualRace = () => {
+    const racers = candidates.slice(0, MAX_RACERS).map((result, index): Racer => ({
+      key: `${result.id}`,
+      name: result.dt_player_person.name,
+      team: result.dt_player_person.mst_team.name,
+      categoryName: result.mst_category.name,
+      stroke: result.mst_category.stroke ?? '',
+      distance: result.mst_category.distance ?? poolLength,
+      timeSeconds: Number(result.time_seconds),
+      color: RACER_COLORS[index],
+      rank: result.rank,
+      resultId: result.id,
+      meetRound: result.mst_event.round,
+      ageName: result.mst_age.name,
+    }))
+    setSelectedRacers(racers)
   }
 
   const removeRacer = (key: string) => {
@@ -141,6 +236,7 @@ export default function RaceGame({ results }: Props) {
   const reset = useCallback(() => {
     cancelAnimationFrame(animRef.current)
     runningRef.current = false
+    elapsedBaseRef.current = 0
     setPhase('setup')
     setFinishResults([])
     setElapsedDisplay(0)
@@ -148,19 +244,24 @@ export default function RaceGame({ results }: Props) {
 
   const tick = useCallback((ts: number) => {
     if (!runningRef.current) return
-    const elapsed = (ts - startTsRef.current) / 1000 * speedRef.current
+    const elapsed = elapsedBaseRef.current + (ts - startTsRef.current) / 1000 * speedRef.current
     const racers  = racersRef.current
     const pool    = poolRef.current
-
-    let anyFinished = false
+    const remainingFinishTimes = racers
+      .map((racer) => racer.timeSeconds)
+      .filter((time) => time > elapsedBaseRef.current + 0.0001)
+      .sort((a, b) => a - b)
+    const nextFinishTime = raceControl === 'full'
+      ? remainingFinishTimes[remainingFinishTimes.length - 1]
+      : remainingFinishTimes[0]
+    const displayElapsed = nextFinishTime != null ? Math.min(elapsed, nextFinishTime) : elapsed
 
     for (let i = 0; i < racers.length; i++) {
       const racer      = racers[i]
       const swimSpeed  = racer.distance / racer.timeSeconds
-      const distCovered = elapsed * swimSpeed
+      const distCovered = displayElapsed * swimSpeed
 
       if (distCovered >= racer.distance) {
-        anyFinished = true
         // Clamp swimmer exactly at finish line
         // finLap odd → swimmer ended at right wall (100%); even → left wall (0%)
         const finLap = Math.floor(racer.distance / pool)
@@ -181,14 +282,15 @@ export default function RaceGame({ results }: Props) {
       }
 
       const timeEl = timeRefs.current[i]
-      if (timeEl) timeEl.textContent = fmtTime(Math.min(elapsed, racer.timeSeconds))
+      if (timeEl) timeEl.textContent = fmtTime(Math.min(displayElapsed, racer.timeSeconds))
     }
 
-    setElapsedDisplay(elapsed)
+    setElapsedDisplay(displayElapsed)
 
-    if (anyFinished) {
+    if (nextFinishTime != null && elapsed >= nextFinishTime) {
       const winner = racers.reduce((best, r) => r.timeSeconds < best.timeSeconds ? r : best)
       const fr: FinishResult[] = racers
+        .filter((racer) => racer.timeSeconds <= nextFinishTime + 0.0001)
         .slice()
         .sort((a, b) => a.timeSeconds - b.timeSeconds)
         .map((r, idx) => ({
@@ -199,12 +301,13 @@ export default function RaceGame({ results }: Props) {
       cancelAnimationFrame(animRef.current)
       runningRef.current = false
       setFinishResults(fr)
-      setPhase('finished')
+      elapsedBaseRef.current = nextFinishTime
+      setPhase(fr.length === racers.length ? 'finished' : 'paused')
       return
     }
 
     animRef.current = requestAnimationFrame(tick)
-  }, [])
+  }, [raceControl])
 
   const startRace = useCallback(() => {
     if (selectedRacers.length < 1) return
@@ -212,18 +315,43 @@ export default function RaceGame({ results }: Props) {
     speedRef.current   = speed
     poolRef.current    = poolLength
     startTsRef.current = performance.now()
+    elapsedBaseRef.current = 0
     runningRef.current = true
     setPhase('running')
     setElapsedDisplay(0)
     animRef.current = requestAnimationFrame(tick)
   }, [selectedRacers, speed, poolLength, tick])
 
+  const continueRace = useCallback(() => {
+    if (phase !== 'paused') return
+    startTsRef.current = performance.now()
+    runningRef.current = true
+    setPhase('running')
+    animRef.current = requestAnimationFrame(tick)
+  }, [phase, tick])
+
+  const restartRace = useCallback(() => {
+    cancelAnimationFrame(animRef.current)
+    racersRef.current = selectedRacers
+    speedRef.current = speed
+    poolRef.current = poolLength
+    startTsRef.current = performance.now()
+    elapsedBaseRef.current = 0
+    runningRef.current = true
+    setFinishResults([])
+    setElapsedDisplay(0)
+    setPhase('running')
+    animRef.current = requestAnimationFrame(tick)
+  }, [poolLength, selectedRacers, speed, tick])
+
   useEffect(() => { speedRef.current = speed }, [speed])
   useEffect(() => () => cancelAnimationFrame(animRef.current), [])
 
   const isRunning  = phase === 'running'
+  const isPaused   = phase === 'paused'
   const isFinished = phase === 'finished'
-  const displayRacers = isRunning || isFinished ? racersRef.current : selectedRacers
+  const isRaceView = isRunning || isPaused || isFinished
+  const displayRacers = isRaceView ? racersRef.current : selectedRacers
 
   return (
     <div className="p-4 pb-24 space-y-4">
@@ -261,6 +389,25 @@ export default function RaceGame({ results }: Props) {
               {pl}m
             </button>
           ))}
+          <span className="text-xs text-slate-400 ml-2">進行:</span>
+          <button
+            disabled={isRunning}
+            onClick={() => setRaceControl('step')}
+            className={`text-xs px-2 py-1 rounded transition-colors ${
+              raceControl === 'step' ? 'bg-sky-700 text-white' : 'bg-slate-700 text-slate-300'
+            }`}
+          >
+            ⏸ ゴールごと
+          </button>
+          <button
+            disabled={isRunning}
+            onClick={() => setRaceControl('full')}
+            className={`text-xs px-2 py-1 rounded transition-colors ${
+              raceControl === 'full' ? 'bg-emerald-700 text-white' : 'bg-slate-700 text-slate-300'
+            }`}
+          >
+            ▶ 完全レース
+          </button>
         </div>
       </div>
 
@@ -302,64 +449,135 @@ export default function RaceGame({ results }: Props) {
             {/* Candidate list */}
             <div className="rounded-xl border border-slate-700 bg-slate-800/40 p-4">
               <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">
-                STEP 2 — 選手を選ぶ{' '}
-                <span className="normal-case text-slate-600 font-normal">（最大5名）</span>
+              STEP 2 — 選手を選ぶ{' '}
+                <span className="normal-case text-slate-600 font-normal">（最大{MAX_RACERS}名）</span>
               </p>
-              {/* Filters */}
-              <div className="flex gap-2 mb-3">
-                <select
-                  className="flex-1 bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-sky-600"
-                  value={teamFilter}
-                  onChange={(e) => setTeamFilter(e.target.value)}
-                >
-                  <option value="">全チーム</option>
-                  {teams.map((t) => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
-                </select>
-                <input
-                  className="flex-1 bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-sky-600"
-                  placeholder="名前で絞り込み…"
-                  value={nameFilter}
-                  onChange={(e) => setNameFilter(e.target.value)}
-                />
+              <div className="grid grid-cols-2 gap-1.5 mb-3">
+                {([
+                  ['browse', '🔎 選手を探す'],
+                  ['records', '🏆 大会新'],
+                  ['near', '⚡ 近いタイム'],
+                  ['actual', '🎬 実レース再現'],
+                ] as const).map(([mode, label]) => (
+                  <button
+                    key={mode}
+                    disabled={(mode === 'near' || mode === 'actual') && !baseRacer}
+                    onClick={() => setQuickMode(mode)}
+                    className={`rounded-lg px-2 py-2 text-[11px] font-semibold transition-colors disabled:opacity-30 ${
+                      quickMode === mode
+                        ? 'bg-violet-600 text-white'
+                        : 'bg-slate-900 text-slate-300 hover:bg-slate-700'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
+              {(quickMode === 'near' || quickMode === 'actual') && baseRacer && (
+                <div className="mb-3 rounded-lg border border-violet-500/20 bg-violet-950/20 px-3 py-2 text-[10px] text-violet-200">
+                  基準：{baseRacer.name}・第{baseRacer.meetRound}回 {baseRacer.categoryName}
+                  {quickMode === 'near' ? `・${fmtTime(baseRacer.timeSeconds)}に近い順` : 'の同じ組を再現'}
+                </div>
+              )}
+              {/* Filters */}
+              {(quickMode === 'browse' || quickMode === 'records') && (
+                <div className="flex gap-2 mb-3">
+                  <select
+                    className="flex-1 min-w-0 bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-sky-600"
+                    value={teamFilter}
+                    onChange={(e) => setTeamFilter(Number(e.target.value))}
+                  >
+                    <option value={0}>全チーム</option>
+                    {sortedTeams.map((team) => (
+                      <option key={team.id} value={team.id}>{teamDisplayName(team.name)}</option>
+                    ))}
+                  </select>
+                  <input
+                    className="flex-1 min-w-0 bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-sky-600"
+                    placeholder="選手名…"
+                    value={nameFilter}
+                    onChange={(e) => setNameFilter(e.target.value)}
+                  />
+                </div>
+              )}
               {/* List */}
-              <div className="h-52 overflow-y-auto space-y-0.5 pr-1">
-                {candidates.slice(0, 150).map((r) => {
-                  const key    = `${r.id}`
-                  const already = selectedRacers.some((s) => s.key === key)
-                  const full   = selectedRacers.length >= 5
-                  const t      = Number(r.time_seconds ?? 0)
-                  const stroke = (r.mst_category as unknown as { stroke?: string })?.stroke ?? ''
+              <div className="h-72 overflow-y-auto space-y-1 pr-1">
+                {candidatesLoading && (
+                  <p className="text-center text-slate-500 text-xs py-8">候補を読み込み中…</p>
+                )}
+                {!candidatesLoading && candidateError && (
+                  <p className="text-center text-rose-400 text-xs py-8">{candidateError}</p>
+                )}
+                {!candidatesLoading && quickMode === 'actual' && candidates.length > 0 && (
+                  <button
+                    onClick={addActualRace}
+                    className="mb-2 w-full rounded-lg bg-emerald-700 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-600"
+                  >
+                    このレースの{Math.min(candidates.length, MAX_RACERS)}名をまとめて選択
+                  </button>
+                )}
+                {!candidatesLoading && groupedCandidates.map((group) => {
+                  const isOpen = expandedPlayers.has(group.player.id)
+                    || quickMode === 'near'
+                    || quickMode === 'actual'
+                    || group.results.length === 1
                   return (
-                    <button
-                      key={key}
-                      disabled={already || full}
-                      onClick={() => addRacer(r)}
-                      className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-left transition-colors text-xs ${
-                        already
-                          ? 'bg-sky-900/30 text-sky-400 cursor-default'
-                          : full
-                          ? 'opacity-30 cursor-not-allowed text-slate-400'
-                          : 'hover:bg-slate-700 text-slate-200'
-                      }`}
-                    >
-                      <span className="text-sm leading-none shrink-0">{getStrokeEmoji(stroke)}</span>
-                      <span className="truncate font-medium flex-1">{r.dt_player_person?.name}</span>
-                      <span className="text-slate-500 shrink-0 text-[10px] max-w-[100px] truncate">
-                        {r.mst_category?.name}
-                      </span>
-                      <span className="font-mono text-slate-300 shrink-0">{fmtTime(t)}</span>
-                      {already && <span className="text-sky-500 shrink-0 text-[10px]">✓</span>}
-                    </button>
+                    <div key={group.player.id} className="overflow-hidden rounded-lg border border-slate-700/60 bg-slate-900/40">
+                      <button
+                        onClick={() => setExpandedPlayers((previous) => {
+                          const next = new Set(previous)
+                          if (next.has(group.player.id)) next.delete(group.player.id)
+                          else next.add(group.player.id)
+                          return next
+                        })}
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-slate-800"
+                      >
+                        <span className="text-xs">{isOpen ? '▾' : '▸'}</span>
+                        <span className="min-w-0 flex-1 truncate text-xs font-bold text-white">{group.player.name}</span>
+                        <span className="truncate text-[10px] text-slate-500">{teamDisplayName(group.player.mst_team.name)}</span>
+                        <span className="rounded-full bg-slate-800 px-1.5 py-0.5 text-[9px] text-slate-500">{group.results.length}</span>
+                      </button>
+                      {isOpen && (
+                        <div className="border-t border-slate-800 py-1">
+                          {group.results.map((result) => {
+                            const key = `${result.id}`
+                            const already = selectedRacers.some((racer) => racer.key === key)
+                            const full = selectedRacers.length >= MAX_RACERS
+                            return (
+                              <button
+                                key={key}
+                                disabled={already || full}
+                                onClick={() => addRacer(result)}
+                                className={`flex w-full items-center gap-2 py-1.5 pl-8 pr-3 text-left text-[11px] transition-colors ${
+                                  already
+                                    ? 'bg-sky-900/30 text-sky-300'
+                                    : full
+                                      ? 'cursor-not-allowed opacity-30'
+                                      : 'text-slate-300 hover:bg-slate-800'
+                                }`}
+                              >
+                                <span>{result.is_meet_record ? '🏆' : getStrokeEmoji(result.mst_category.stroke ?? '')}</span>
+                                <span className="min-w-0 flex-1 truncate">
+                                  第{result.mst_event.round}回　{result.mst_category.name}
+                                  <span className="ml-1 text-slate-600">{result.mst_age.name}</span>
+                                </span>
+                                <span className="shrink-0 font-mono text-slate-200">{fmtTime(Number(result.time_seconds))}</span>
+                                {already && <span className="text-sky-400">✓</span>}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
                   )
                 })}
-                {candidates.length === 0 && (
+                {!candidatesLoading && !candidateError && candidates.length === 0 && (
                   <p className="text-center text-slate-600 text-xs py-8">
-                    {strokeFilter !== 'all'
-                      ? `${strokeFilter}の記録が見つかりません`
-                      : '候補なし'}
+                    {quickMode === 'near' || quickMode === 'actual'
+                      ? '先に基準にする記録を1つ選んでください'
+                      : strokeFilter !== 'all'
+                        ? `${strokeFilter}の記録が見つかりません`
+                        : '候補なし'}
                   </p>
                 )}
               </div>
@@ -369,7 +587,7 @@ export default function RaceGame({ results }: Props) {
             <div className="rounded-xl border border-slate-700 bg-slate-800/40 p-4 flex flex-col">
               <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">
                 出場選手{' '}
-                <span className="normal-case text-slate-600 font-normal">{selectedRacers.length}/5</span>
+                <span className="normal-case text-slate-600 font-normal">{selectedRacers.length}/{MAX_RACERS}</span>
               </p>
               <div className="flex-1 space-y-2 min-h-[120px]">
                 {selectedRacers.length === 0 && (
@@ -386,7 +604,7 @@ export default function RaceGame({ results }: Props) {
                     <div className="flex-1 min-w-0">
                       <div className="text-xs font-medium text-white truncate">{racer.name}</div>
                       <div className="text-[10px] text-slate-500 truncate">
-                        {getStrokeEmoji(racer.stroke)} {racer.categoryName} · {fmtTime(racer.timeSeconds)}
+                        {getStrokeEmoji(racer.stroke)} 第{racer.meetRound}回 {racer.categoryName} · {fmtTime(racer.timeSeconds)}
                       </div>
                     </div>
                     <button
@@ -412,14 +630,18 @@ export default function RaceGame({ results }: Props) {
       )}
 
       {/* ── Race Track ── */}
-      {(isRunning || isFinished) && (
+      {isRaceView && (
         <div className="rounded-xl border border-slate-700/60 overflow-hidden">
 
           {/* Track header */}
           <div className="flex items-center justify-between px-4 py-2 bg-slate-800/60 border-b border-slate-700/40">
             <div className="text-xs text-slate-400">
               {isRunning ? (
-                <span className="text-emerald-400 font-bold animate-pulse">▶ RACE</span>
+                <span className="text-emerald-400 font-bold animate-pulse">
+                  ▶ RACE · {raceControl === 'full' ? '完全レース' : 'ゴールごと'}
+                </span>
+              ) : isPaused ? (
+                <span className="text-sky-400 font-bold">⏸ ゴール待機</span>
               ) : (
                 <span className="text-amber-400 font-bold">🏁 FINISH</span>
               )}
@@ -447,6 +669,20 @@ export default function RaceGame({ results }: Props) {
                   ))}
                 </div>
               )}
+              {isPaused && (
+                <button
+                  className="text-xs px-3 py-1 rounded bg-sky-600 hover:bg-sky-500 text-white font-bold"
+                  onClick={continueRace}
+                >
+                  ▶ 続行
+                </button>
+              )}
+              <button
+                className="text-xs px-3 py-1 rounded bg-violet-700 hover:bg-violet-600 text-white"
+                onClick={restartRace}
+              >
+                ↻ 再実行
+              </button>
               <button
                 className="text-xs px-3 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-300"
                 onClick={reset}
@@ -466,7 +702,8 @@ export default function RaceGame({ results }: Props) {
 
             {displayRacers.map((racer, i) => {
               const totalLaps = Math.ceil(racer.distance / poolLength)
-              const isWinner  = isFinished && finishResults[0]?.racer.key === racer.key
+              const finishedRow = finishResults.find((result) => result.racer.key === racer.key)
+              const isWinner = finishResults[0]?.racer.key === racer.key
               return (
                 <div key={racer.key} className="flex items-center gap-2">
                   {/* Lane label */}
@@ -538,11 +775,11 @@ export default function RaceGame({ results }: Props) {
                     >
                       {fmtTime(racer.timeSeconds)}
                     </span>
-                    {isFinished && (
+                    {finishedRow && (
                       <div className="text-[9px] text-slate-600 mt-0.5">
                         {isWinner
                           ? <span className="text-amber-400 font-bold">🥇 1位</span>
-                          : <span className="text-rose-400">+{(finishResults.find(f => f.racer.key === racer.key)?.gapSeconds ?? 0).toFixed(2)}s</span>
+                          : <span className="text-rose-400">+{finishedRow.gapSeconds.toFixed(2)}s</span>
                         }
                       </div>
                     )}
@@ -553,7 +790,7 @@ export default function RaceGame({ results }: Props) {
           </div>
 
           {/* Finish results */}
-          {isFinished && finishResults.length > 0 && (
+          {(isPaused || isFinished) && finishResults.length > 0 && (
             <div className="border-t border-slate-700/50 px-4 py-3 bg-slate-900/40">
               <p className="text-xs font-bold text-amber-400 mb-2">🏁 レース結果</p>
               <div className="space-y-1.5">
@@ -576,11 +813,19 @@ export default function RaceGame({ results }: Props) {
                   </div>
                 ))}
               </div>
+              {isPaused && (
+                <button
+                  className="mt-3 w-full py-2 rounded-lg text-xs font-bold bg-sky-600 hover:bg-sky-500 text-white transition-colors"
+                  onClick={continueRace}
+                >
+                  ▶ 続行 — 次の選手がゴールするまで
+                </button>
+              )}
               <button
-                className="mt-3 w-full py-2 rounded-lg text-xs font-bold bg-slate-700 hover:bg-slate-600 text-slate-200 transition-colors"
-                onClick={reset}
+                className="mt-2 w-full py-2 rounded-lg text-xs font-bold bg-violet-700 hover:bg-violet-600 text-white transition-colors"
+                onClick={restartRace}
               >
-                ← もう一度レースする
+                ↻ 同じメンバーでレース再実行
               </button>
             </div>
           )}
